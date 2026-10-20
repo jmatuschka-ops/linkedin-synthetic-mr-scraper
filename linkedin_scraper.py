@@ -1536,9 +1536,11 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
 <h3 class="sub">New this run</h3>
 {_filterbar(new_items[:50])}
 <div class="scroll"><table class="feed filt"><tbody>{"".join(row(i) for i in new_items[:50]) or "<tr><td>Nothing new.</td></tr>"}</tbody></table></div>
+<button type="button" class="expand" hidden></button>
 {_h2("items", "All items", p)}
 {_filterbar(items)}
 <div class="scroll"><table class="feed all filt"><tbody>{"".join(row(i) for i in items) or "<tr><td>No items in this period.</td></tr>"}</tbody></table></div>
+<button type="button" class="expand" hidden></button>
 </section>"""
 
 
@@ -1863,6 +1865,9 @@ input.q{{flex:1 1 260px;min-width:0;padding:9px 14px;border-radius:10px;border:1
 .chip[aria-pressed=true]{{background:var(--acc);border-color:var(--acc);color:var(--acc-fg)}}
 select.qc{{font:inherit;font-size:14px;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg);max-width:100%}}
 .fcount{{font:12px var(--f-mono)}}
+.expand{{display:block;margin:10px auto 0;font:500 14px var(--f-body);padding:8px 18px;border-radius:99px;border:1px solid var(--line);
+background:var(--card);color:var(--acc);cursor:pointer}}.expand:hover{{border-color:var(--acc)}}
+.filters{{scroll-margin-top:124px}}
 input.q::placeholder{{color:var(--mut)}}
 
 /* briefs */
@@ -1940,13 +1945,19 @@ function balance(root){{(root||document).querySelectorAll('.cols').forEach(row=>
 }})}}
 const _show=show; show=function(p){{_show(p);balance(document.querySelector(`section[data-period="${{p}}"]`))}};
 window.addEventListener('load',()=>balance(document.querySelector('section.period:not([hidden])')));
+// Item tables start with their first 10 rows; filtering searches every row.
+const FIRST=10;
 document.querySelectorAll('.filters').forEach(f=>{{
- const table=f.nextElementSibling.querySelector('table'), q=f.querySelector('input.q'), sel=f.querySelector('select.qc'), out=f.querySelector('.fcount');
- let ch='';
- function apply(){{const v=q.value.toLowerCase(), c=sel.value; let n=0;
+ const wrap=f.nextElementSibling, table=wrap.querySelector('table'), btn=wrap.nextElementSibling,
+       q=f.querySelector('input.q'), sel=f.querySelector('select.qc'), out=f.querySelector('.fcount');
+ let ch='', open=false;
+ function apply(){{const v=q.value.toLowerCase(), c=sel.value, filtering=!!(v||c||ch); let n=0, shown=0;
   table.querySelectorAll('tr[data-ch]').forEach(r=>{{const ok=(!ch||r.dataset.ch===ch)&&(!c||(' '+r.dataset.tags+' ').includes(c))&&(!v||r.textContent.toLowerCase().includes(v));
-   r.hidden=!ok; if(ok)n++}});
-  out.textContent=(v||c||ch)?n+' shown':''}}
+   if(ok)n++; const vis=ok&&(open||n<=FIRST); r.hidden=!vis; if(vis)shown++}});
+  out.textContent=filtering?n+' match':'';
+  if(btn&&btn.classList.contains('expand')){{btn.hidden=n<=FIRST; btn.textContent=open?'Show fewer':'Show all '+n+(filtering?' matches':' items')}}}}
+ if(btn&&btn.classList.contains('expand'))btn.addEventListener('click',()=>{{open=!open;apply();if(!open)f.scrollIntoView({{block:'start'}})}});
+ apply();
  f.querySelectorAll('.chip').forEach(b=>b.addEventListener('click',()=>{{ch=b.dataset.ch;
   f.querySelectorAll('.chip').forEach(x=>x.setAttribute('aria-pressed',x===b));apply()}}));
  q.addEventListener('input',apply); sel.addEventListener('change',apply);
