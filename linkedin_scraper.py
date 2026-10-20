@@ -695,6 +695,19 @@ def extract_author(item: dict, channel: str) -> str:
     return m.group(1) if m else ""
 
 
+_SYNTH_TOPIC = re.compile(
+    r"synthetic|digital twin|silicon sampl|silicon subject|homo silicus|persona|simulat|virtual audience"
+    r"|ai respondent|llm respondent|ai[- ]generated respond|replace (?:human|real) (?:survey )?respond"
+    r"|without (?:people|humans|respondents)|ai (?:survey|panel)s?\b|llms? (?:as|replace|simulate)", re.I)
+
+
+def _about_synthetic(item: dict) -> bool:
+    """LinkedIn page text often includes comments and sidebars, so one passing mention of
+    "synthetic" (e.g. in a comment) isn't enough: the topic must be in the post's title, or come up
+    at least twice in its text."""
+    return bool(_SYNTH_TOPIC.search(item["title"])) or len(_SYNTH_TOPIC.findall(item.get("snippet", ""))) >= 2
+
+
 def is_relevant(item: dict, cfg: dict) -> bool:
     # Keep anything naming a tracked competitor; otherwise require a synthetic
     # capability *and* a market-research context term.
@@ -710,6 +723,8 @@ def is_relevant(item: dict, cfg: dict) -> bool:
         return any(t in low for t in cfg["academic"].get("relevance_terms", [])) or bool(item["competitors"])
     if item["competitors"]:
         return True
+    if item["source"] == "tavily" and not _about_synthetic(item):
+        return False
     synthetic = bool(item["capabilities"]) or bool(
         re.search(r"synthetic|digital twin|silicon sampl|silicon subject|homo silicus|persona|simulat", low))
     if item.get("voices") and synthetic:
@@ -1040,14 +1055,14 @@ def _attention_section(cfg, p, cur, any_counts: bool = True) -> str:
         # Nothing to rank by comments anywhere yet: one full-width panel instead of an empty second one.
         return f"""
 {_h2("rising", "Rising to the top", p)}
-<div class="panel"><h3>Most worth reading <small>· attention score</small></h3>{note}{top_html}
+<div class="panel"><div class="rank-head"><h3>Most worth reading</h3><span class="lbl">Attention score</span></div>{note}{top_html}
  {explain}
  <p class="foot"><b>Most discussed</b> (posts ranked by comment count, with debates flagged) appears here once
  reaction and comment counts come in. They come from LinkedIn search results, or from counts added to inbox files.</p></div>"""
     return f"""
 {_h2("rising", "Rising to the top", p)}
 <div class="cols cols-wide">
- <div class="panel"><h3>Most worth reading <small>· attention score</small></h3>{note}{top_html}</div>
+ <div class="panel"><div class="rank-head"><h3>Most worth reading</h3><span class="lbl">Attention score</span></div>{note}{top_html}</div>
  <div class="panel"><h3>Most discussed <small>· by comments</small></h3>{talk_html}</div>
 </div>
 {explain.replace("class='foot'", "class='foot foot-out'")}"""
@@ -1073,9 +1088,12 @@ def split_periods(items: list[dict], p: int) -> tuple[list[dict], list[dict]]:
     return cur, prev
 
 
+NOT_ACTIVITY = ("company page", "job")   # pages that exist, not things a competitor did or said
+
+
 def trend_stats(cur: list[dict], prev: list[dict]) -> dict:
     def cnt(items, key):
-        return Counter(x for i in items for x in i[key])
+        return Counter(x for i in items if i.get("url_type") not in NOT_ACTIVITY for x in i[key])
     return {"comp_cur": cnt(cur, "competitors"), "comp_prev": cnt(prev, "competitors"),
             "sig_cur": cnt(cur, "signals"), "sig_prev": cnt(prev, "signals"),
             "cap_cur": cnt(cur, "capabilities"), "cap_prev": cnt(prev, "capabilities")}
@@ -1322,9 +1340,12 @@ def _trends_section(cfg, p, cur, prev, briefs, earliest, seg, first_run) -> str:
         f"<td>{html.escape(sig_by[c].most_common(1)[0][0]) if sig_by[c] else '—'}</td>"
         f"<td>{html.escape(cap_by[c].most_common(1)[0][0]) if cap_by[c] else '—'}</td></tr>"
         for c in names)
-    mom_html = (f"<div class='scroll'><table class='mom'><thead><tr><th>Competitor</th><th>Last {p}d</th>"
-                f"<th>Prior {p}d</th><th>Change</th><th>Main signal</th><th>Main capability</th></tr></thead>"
-                f"<tbody>{mom_rows or '<tr><td colspan=6>No competitor mentions.</td></tr>'}</tbody></table></div>")
+    mom_html = (f"<div class='scroll'><table class='mom'><thead><tr><th>Competitor</th><th>Items · last {p}d</th>"
+                f"<th>Items · prior {p}d</th><th>Change</th><th>Main signal</th><th>Main capability</th></tr></thead>"
+                f"<tbody>{mom_rows or '<tr><td colspan=6>No competitor mentions.</td></tr>'}</tbody></table></div>"
+                "<p class='foot foot-out'>Items = LinkedIn posts and articles, news stories and papers that name the "
+                "competitor (or one of its products) in the period. An item naming several competitors counts for each. "
+                "Company pages and job listings aren't counted. Undated items count from the date they were found.</p>")
 
     # --- Names not on the watchlist ----------------------------------------
     emerging = emerging_names(cur, cfg)
@@ -1339,7 +1360,7 @@ def _trends_section(cfg, p, cur, prev, briefs, earliest, seg, first_run) -> str:
 </div>
 {'<div class="panel" style="margin-top:12px"><h3>Key moves</h3>' + moves_html + '</div>' if ai_html else ''}
 <h3 class="sub">Momentum vs prior {p} days</h3>{mom_html}
-<div class="panel" style="margin-top:12px"><h3>Names not on your watchlist <small>· launching, raising or partnering in this coverage; consider adding to config.toml</small></h3>
+<div class="panel" style="margin-top:12px"><h3>Organizations not on the watchlist <small>· launching, raising or partnering in this period's coverage</small></h3>
 {em_html}</div>"""
 
 
@@ -1417,7 +1438,7 @@ def _beyond_section(cfg, p, cur) -> str:
 {news_html}</div>
 <div class="cols" style="margin-top:12px">
  <div class="panel"><h3>Industry voices</h3>{voices_html}
-  <h4>People to watch <small>· speaking about synthetic, not on your voices list</small></h4>{people_html}</div>
+  <h4>People to watch <small>· speaking about synthetic, not on the voices list</small></h4>{people_html}</div>
  <div class="panel"><h3>Academic &amp; research</h3>{acad_html}</div>
 </div>"""
 
@@ -1426,7 +1447,7 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
     cur, prev = split_periods(all_items, p)
     items = cur
     seg = {c["name"]: c.get("segment", "") for c in cfg["competitors"]}
-    comp_count = Counter(c for it in items for c in it["competitors"])
+    comp_count = Counter(c for it in items if it.get("url_type") not in NOT_ACTIVITY for c in it["competitors"])
     comps = [c for c, _ in comp_count.most_common()]
     sig_cols, cap_cols = list(cfg["signals"]), list(cfg["capabilities"])
     sig_m, cap_m = defaultdict(Counter), defaultdict(Counter)
@@ -1511,7 +1532,7 @@ def _coverage_section(cfg, stats, last, earliest) -> str:
         "Search engines index only part of LinkedIn. Many personal-profile posts, all comments, and anything behind login never appear in results.",
         "News items are tagged from the headline only (Google News doesn't return article text), so signal and capability tags undercount.",
         "Posts by a competitor's employees that don't name the company or a tracked product are missed. Add product names and exec names as aliases to catch more.",
-        "Competitors not in config.toml are only caught when they show up next to topic terms. The 'Names not on your watchlist' list helps find them.",
+        "Competitors not in config.toml are only caught when they show up next to topic terms. The 'Organizations not on the watchlist' list helps find them.",
         "People are caught three ways: by name (the voices list), as the author of an indexed LinkedIn post or article, or when quoted as a professor or researcher. Commentators quoted any other way are missed.",
         "Engagement counts (reactions, comments) are only known when a search engine shows them in its result, or you add them in an inbox file. LinkedIn offers no approved way to read engagement on other people's posts, so many posts get ranked on search prominence alone.",
         "Academic coverage is arXiv plus press coverage of studies. Journals, SSRN and conference papers that aren't on arXiv are not searched.",
@@ -1724,7 +1745,9 @@ h3{{font:600 15px/1.3 var(--f-body);margin:0 0 10px}}
 h3.sub{{font-size:14px;margin:26px 0 10px;color:var(--fg)}}
 h4{{font:500 11px var(--f-mono);margin:18px 0 8px;color:var(--mut);text-transform:uppercase;letter-spacing:.08em}}
 .panel,.kpi,.brief{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;min-width:0}}
-.cols{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:14px;align-items:stretch}}
+.cols{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:14px;align-items:start}}
+.rank-head{{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:10px}}
+.rank-head h3{{margin:0}}.rank-head .lbl{{flex:0 0 72px;text-align:right;white-space:nowrap}}
 .cols-wide{{grid-template-columns:minmax(0,1.7fr) minmax(0,1fr)}}
 @media (max-width:820px){{.cols-wide{{grid-template-columns:minmax(0,1fr)}}}}
 .foot-out{{border-top:0;padding-top:0;margin-top:8px}}
@@ -1834,6 +1857,32 @@ document.querySelectorAll('.jump button').forEach(b=>b.addEventListener('click',
 const k=b.dataset.jump, vis=document.querySelector('section.period:not([hidden])');
 const t=(vis&&vis.querySelector(`[data-sec="${{k}}"]`))||document.querySelector(`[data-sec="${{k}}"]`);
 if(t)t.scrollIntoView({{block:'start'}})}}));
+// Balance side-by-side cards: while a card is shorter than its neighbour, move rows from its
+// "Show more" list into the visible list, so pairs end level without empty space or stretching.
+function balance(root){{(root||document).querySelectorAll('.cols').forEach(row=>{{
+ const cards=[...row.children]; if(cards.length<2) return;
+ const tops=new Set(cards.map(c=>Math.round(c.getBoundingClientRect().top))); if(tops.size>1) return; // stacked on narrow screens
+ for(let guard=0;guard<40;guard++){{
+  const hs=cards.map(c=>c.getBoundingClientRect().height), tall=Math.max(...hs);
+  const i=hs.indexOf(Math.min(...hs)), card=cards[i], d=card.querySelector('details.more:not([open])'); if(!d) break;
+  const src=d.querySelector('ul'), li=src&&src.firstElementChild, dst=d.previousElementSibling; if(!li||!dst) break;
+  dst.appendChild(li); const h=card.getBoundingClientRect().height;
+  if(h>tall+8){{src.prepend(li);break}}
+  const left=src.children.length, sum=d.querySelector('summary');
+  if(!left){{d.remove();continue}} sum.textContent='Show '+left+' more';
+ }}
+ // If the shorter card had nothing left to reveal, trim the taller one instead (keep at least 3 rows).
+ for(let guard=0;guard<20;guard++){{
+  const hs=cards.map(c=>c.getBoundingClientRect().height), i=hs.indexOf(Math.max(...hs)), card=cards[i];
+  const other=Math.max(...hs.filter((_,j)=>j!==i)), d=card.querySelector('details.more:not([open])');
+  const vis=d&&d.previousElementSibling; if(!vis||vis.children.length<=3||hs[i]-other<40) break;
+  const li=vis.lastElementChild; d.querySelector('ul').prepend(li);
+  if(card.getBoundingClientRect().height<other-8){{vis.appendChild(li);break}}
+  d.querySelector('summary').textContent='Show '+d.querySelector('ul').children.length+' more';
+ }}
+}})}}
+const _show=show; show=function(p){{_show(p);balance(document.querySelector(`section[data-period="${{p}}"]`))}};
+window.addEventListener('load',()=>balance(document.querySelector('section.period:not([hidden])')));
 document.querySelectorAll('section.period').forEach(sec=>{{const q=sec.querySelector('input.q');
 q.addEventListener('input',e=>{{const v=e.target.value.toLowerCase();
 sec.querySelectorAll('table.all tr').forEach(r=>r.hidden=!r.textContent.toLowerCase().includes(v))}})}});

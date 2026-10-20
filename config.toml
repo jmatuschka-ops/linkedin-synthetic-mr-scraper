@@ -120,7 +120,7 @@ segment = "pure-play"
 
 [[competitors]]
 name = "Yabble"
-aliases = ["Yabble", "Virtual Audiences"]
+aliases = ["Yabble"]   # "Virtual Audiences" is also a generic phrase (concerts, events); it stays a topic term
 segment = "pure-play"
 
 # Incumbent research firms / platforms with synthetic offerings
