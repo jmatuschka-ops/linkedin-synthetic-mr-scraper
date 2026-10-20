@@ -1,0 +1,125 @@
+<title>Synthetic MR Weekly Email</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one narrow card centred on the report's cool grey ground; same tokens as the report. */
+:root{--bg:#f1f4f6;--card:#ffffff;--fg:#14202a;--mut:#5a6875;--line:#d9e0e5;--soft:#e8edf0;
+--acc:#0c727e;--acc-fg:#ffffff;--up:#1f7d45;--dn:#bb3527;
+--f-display:"Bricolage Grotesque","IBM Plex Sans",system-ui,sans-serif;
+--f-body:"IBM Plex Sans",-apple-system,"Segoe UI",system-ui,sans-serif;
+--f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e1418;--card:#151d23;--fg:#e5ebef;--mut:#93a1ac;--line:#25313a;--soft:#1b252c;
+--acc:#4fc0c8;--acc-fg:#06262a;--up:#66d08f;--dn:#ff8a7d;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0e1418;--card:#151d23;--fg:#e5ebef;--mut:#93a1ac;--line:#25313a;--soft:#1b252c;
+--acc:#4fc0c8;--acc-fg:#06262a;--up:#66d08f;--dn:#ff8a7d;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 var(--f-body)}
+main{max-width:560px;margin:0 auto;padding-block:48px 64px;padding-inline:16px}
+.kicker{font:500 12px var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--acc)}
+h1{font:700 clamp(26px,5vw,32px)/1.15 var(--f-display);margin:6px 0 10px;text-wrap:balance}
+.lede{color:var(--mut);margin:0 0 24px;max-width:60ch}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px}
+label{display:block;font-weight:600;margin-bottom:6px}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+input{flex:1 1 240px;min-width:0;padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);font:inherit}
+button{font:500 15px var(--f-body);padding:10px 16px;border-radius:8px;border:1px solid var(--acc);background:var(--acc);color:var(--acc-fg);cursor:pointer}
+button.ghost{background:transparent;color:var(--acc)}
+button:disabled{opacity:.6;cursor:default}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.hint{font-size:13px;color:var(--mut);margin:8px 0 0}
+.err{color:var(--dn);font-size:14px;margin:10px 0 0}
+.ok{color:var(--up);font-weight:600}
+.addr{font-family:var(--f-mono);overflow-wrap:anywhere}
+.back{margin-top:20px;font-size:14px}.back a{color:var(--acc)}
+.list{list-style:none;margin:12px 0 0;padding:0}
+.list li{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-top:1px solid var(--soft)}
+.list li span{font:13px var(--f-mono);overflow-wrap:anywhere;min-width:0}
+.list button{padding:4px 10px;font-size:13px}
+h2{font:600 18px var(--f-display);margin:28px 0 4px}
+</style>
+<main>
+ <span class="kicker">Competitive intel · synthetic research</span>
+ <h1>Get the synthetic MR intel email</h1>
+ <p class="lede">Every Monday morning: a short digest of what competitors, industry voices and researchers did in synthetic respondents, synthetic data and digital twins, with a link to the full report.</p>
+
+ <div class="card">
+  <p data-state="loading">Connecting…</p>
+  <p data-state="off" hidden>Sign-up isn't available in this view. Open this page on claude.ai while signed in, then reload.</p>
+  <p data-state="noaccess" hidden>You can view this page but not sign up yet. Ask the person who shared it with you for <b>Contributor</b> access.</p>
+
+  <form data-state="form" id="f" hidden novalidate>
+   <label for="email">Work email</label>
+   <div class="row"><input id="email" type="email" autocomplete="email" placeholder="you@qualtrics.com" required><button id="go" type="submit">Sign me up</button></div>
+   <p class="hint">Only @qualtrics.com addresses. You can unsubscribe here any time.</p>
+   <p class="err" id="err" role="alert" hidden></p>
+  </form>
+
+  <div data-state="on" hidden>
+   <p><span class="ok">You're on the list.</span> The next email goes to <span class="addr" id="addr"></span> on Monday morning.</p>
+   <button type="button" class="ghost" id="off">Unsubscribe</button>
+  </div>
+
+  <div data-state="owner" hidden>
+   <p>You own this page and already get the email. Everyone who signs up here is added to Monday's send automatically.</p>
+  </div>
+ </div>
+
+ <section id="admin" hidden>
+  <h2>Subscribers <span id="count" class="hint"></span></h2>
+  <p class="hint">Only you can see this list.</p>
+  <ul class="list" id="list"></ul>
+ </section>
+
+ <p class="back"><a href="https://claude.ai/artifact/52dwftZ1hBaynPM3grou6C" target="_blank" rel="noopener">Open the full report →</a></p>
+</main>
+<script>
+(function(){
+ var DOMAIN='qualtrics.com';
+ function $(s){return document.querySelector(s)}
+ function show(state){document.querySelectorAll('[data-state]').forEach(function(e){e.hidden=e.dataset.state!==state})}
+ function okEmail(v){return /^[^@\s,;<>]+@[^@\s,;<>]+$/.test(v)&&v.toLowerCase().slice(-(DOMAIN.length+1))==='@'+DOMAIN}
+ if(!window.claude||typeof window.claude.use!=='function'){show('off');return}
+ (async function(){
+  var caps=await Promise.all([claude.use('db'),claude.use('user')]), db=caps[0], user=caps[1];
+  if(!db||!user){show('off');return}
+  var me=await user.me();
+  if(!me.id){show('off');return}
+  var write=await user.can('data.write'), mine=null, err=$('#err');
+  function render(){
+   if(me.isOwner){show('owner');return}
+   if(mine){$('#addr').textContent=String(mine.email||'');show('on')}
+   else if(write===false){show('noaccess')}
+   else {show('form')}
+  }
+  if(me.isOwner){
+   $('#admin').hidden=false;
+   db.collection('subscribers').onSnapshot(function(s){
+    var ul=$('#list'); ul.textContent='';
+    $('#count').textContent='· '+s.size;
+    if(s.empty){var li0=document.createElement('li');li0.textContent='No one yet. Share this page with your team (Contributor access) and sign-ups appear here.';ul.append(li0)}
+    s.docs.forEach(function(d){
+     var li=document.createElement('li'), em=document.createElement('span'), b=document.createElement('button');
+     em.textContent=String((d.data()||{}).email||'');
+     b.type='button'; b.className='ghost'; b.textContent='Remove';
+     b.addEventListener('click',async function(){b.disabled=true;try{await db.doc('subscribers/'+d.id).delete()}catch(x){b.disabled=false}});
+     li.append(em,b); ul.append(li);
+    });
+   },function(){});
+  } else {
+   db.doc('subscribers/'+me.id).onSnapshot(function(d){mine=d.exists?d.data():null;render()},function(){});
+  }
+  render();
+  $('#f').addEventListener('submit',async function(e){
+   e.preventDefault(); err.hidden=true;
+   var v=$('#email').value.trim();
+   if(!okEmail(v)){err.textContent='Enter your @'+DOMAIN+' work address.';err.hidden=false;return}
+   var b=$('#go'); b.disabled=true;
+   try{await db.doc('subscribers/'+me.id).set({email:v.toLowerCase(),subscribedAt:new Date().toISOString()})}
+   catch(x){if(x&&x.code==='invalid_argument'){show('noaccess')}else{err.textContent="Couldn't save that. Try again in a moment.";err.hidden=false}}
+   finally{b.disabled=false}
+  });
+  $('#off').addEventListener('click',async function(){var b=$('#off');b.disabled=true;
+   try{await db.doc('subscribers/'+me.id).delete()}catch(x){}finally{b.disabled=false}});
+ })();
+})();
+</script>

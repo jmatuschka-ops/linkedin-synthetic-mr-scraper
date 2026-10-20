@@ -1,0 +1,12 @@
+url: https://www.linkedin.com/posts/example-post
+author: Example author, Example Co
+date: 2026-10-01
+reactions: 0
+comments: 0
+reposts: 0
+
+Paste the text of a LinkedIn post you read here. Mentions of tracked
+competitors (e.g. Evidenza) and terms like synthetic respondents or digital
+twins get tagged automatically. Fill in reactions / comments / reposts with
+the counts you see on the post (optional) so it can rank in "Rising to the top".
+Files starting with "_" are ignored, so copy this file to a new name.

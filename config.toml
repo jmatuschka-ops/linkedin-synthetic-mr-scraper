@@ -1,0 +1,332 @@
+# LinkedIn scraper (synthetic offerings in market research) — configuration
+# Edit competitors, aliases, and topic terms freely. Aliases are matched
+# case-insensitively against titles/snippets to attribute items. A competitor's
+# optional `exclude` list drops matches that contain any of those words.
+
+[settings]
+db_path = "data/linkedin_scraper.db"
+report_path = "reports/linkedin_synthetic_mr.html"
+hosted_report_path = "reports/linkedin_synthetic_mr_hosted.html"   # skeleton-free copy for the hosted link
+csv_path = "reports/linkedin_synthetic_mr.csv"
+request_delay_seconds = 1.5     # politeness delay between search calls
+max_results_per_query = 20      # per page (Brave max 20, SerpAPI 10)
+max_pages = 3                   # pages fetched per LinkedIn query while more results exist
+# How far back collection reaches. Keep it >= 2x the longest report period so
+# the report can compare each period with the one before it.
+lookback_days = 180
+# Period switcher in the report (days) and which one opens by default.
+report_periods = [7, 14, 30, 60, 90]
+default_period = 30
+
+# Tavily LinkedIn search (free tier: 1,000 searches/month; a weekly run uses ~50)
+[tavily]
+search_depth = "basic"          # "advanced" costs 2 credits per search
+max_results = 20
+include_domains = ["linkedin.com"]
+
+# Search terms that define the "synthetic" space.
+[topics]
+# Specific to research: searched as-is.
+specific = [
+  "synthetic respondents",
+  "synthetic sample",
+  "synthetic personas",
+  "synthetic panel",
+  "synthetic consumers",
+  "silicon sampling",
+  "AI-generated respondents",
+  "digital twin respondents",
+  "synthetic research",
+  "simulated respondents",
+  "simulated audience",
+  "synthetic focus group",
+  "agentic twins",
+  "AI-simulated consumers",
+]
+# Broad terms: searched together with a research-context qualifier
+# (otherwise manufacturing / healthcare "digital twin" coverage swamps results).
+generic = [
+  "synthetic data",
+  "digital twins",
+  "AI personas",
+  "virtual audiences",
+]
+qualifier = '("market research" OR "consumer research" OR insights OR survey OR respondents)'
+
+# Items that don't name a tracked competitor must contain one of these to be
+# kept (filters out e.g. manufacturing "digital twin" coverage).
+[relevance]
+context_terms = ["market research", "consumer research", "insights", "survey", "respondent",
+                 "panel", "researcher", "esomar", "quirks", "research live", "brand tracking",
+                 "concept test", "consumer"]
+# Items containing any of these are always dropped (syndicated market-sizing PRs etc.).
+exclude_terms = ["market size", "market share", "cagr", "industry report", "augmented reality",
+                 "market to reach", "forecast period",
+                 # non-research "digital twin" industries
+                 " road ", " roads", "mobility sector", "manufactur", "factory", "patient", "supply chain",
+                 "smart city", "aerospace", "oil and gas", "power grid", "construction", "farming",
+                 "agricultur", "mining", "mineral"]
+
+# ---- Competitors -----------------------------------------------------------
+# Pure-play synthetic vendors
+[[competitors]]
+name = "Aaru"
+aliases = ["Aaru"]
+segment = "pure-play"
+
+[[competitors]]
+name = "Evidenza"
+aliases = ["Evidenza"]
+segment = "pure-play"
+
+[[competitors]]
+name = "Electric Twin"
+aliases = ["Electric Twin", "ElectricTwin"]
+segment = "pure-play"
+exclude = ["lexus", "toyota", "suv", "hybrid", "electric vehicle", "motor"]   # car reviews use "electric twin"
+
+[[competitors]]
+name = "Synthetic Users"
+aliases = ["Synthetic Users", "syntheticusers"]
+segment = "pure-play"
+
+[[competitors]]
+name = "Simile"
+aliases = ["Simile AI", "Simile"]
+segment = "pure-play"
+
+[[competitors]]
+name = "Artificial Societies"
+aliases = ["Artificial Societies"]
+segment = "pure-play"
+
+[[competitors]]
+name = "Fairgen"
+aliases = ["Fairgen"]
+segment = "pure-play"
+
+[[competitors]]
+name = "Brox AI"
+aliases = ["Brox AI", "Brox.ai"]
+segment = "pure-play"
+
+[[competitors]]
+name = "Native.ai"
+aliases = ["Native.ai"]   # "Native AI" alone matches unrelated "native AI" phrasing
+segment = "pure-play"
+
+[[competitors]]
+name = "Yabble"
+aliases = ["Yabble", "Virtual Audiences"]
+segment = "pure-play"
+
+# Incumbent research firms / platforms with synthetic offerings
+[[competitors]]
+name = "Ipsos"
+aliases = ["Ipsos", "PersonaBot"]
+segment = "incumbent"
+
+[[competitors]]
+name = "Kantar"
+aliases = ["Kantar"]
+segment = "incumbent"
+
+[[competitors]]
+name = "NielsenIQ"
+aliases = ["NielsenIQ", "NIQ", "BASES"]
+segment = "incumbent"
+
+[[competitors]]
+name = "Toluna"
+aliases = ["Toluna", "HarmonAIze"]
+segment = "incumbent"
+
+[[competitors]]
+name = "Dynata"
+aliases = ["Dynata"]
+segment = "incumbent"
+
+[[competitors]]
+name = "Cint"
+aliases = ["Cint"]
+segment = "incumbent"
+
+[[competitors]]
+name = "Zappi"
+aliases = ["Zappi"]
+segment = "platform"
+
+[[competitors]]
+name = "quantilope"
+aliases = ["quantilope"]
+segment = "platform"
+
+[[competitors]]
+name = "Medallia"
+aliases = ["Medallia"]
+segment = "platform"
+
+[[competitors]]
+name = "SurveyMonkey"
+aliases = ["SurveyMonkey"]
+segment = "platform"
+
+# ---- Weekly email sign-up (on the hosted report page) -----------------------
+[email]
+hosted_url = "https://claude.ai/artifact/52dwftZ1hBaynPM3grou6C"
+# Only addresses at these domains can subscribe (enforced on the page and by the weekly task).
+allowed_domains = ["qualtrics.com"]
+# The in-report sign-up box needs page storage, which stopped the hosted report loading, so sign-up
+# lives on its own small page (signup_url). extra_recipients is optional, for anyone you add by hand.
+signup_enabled = false
+signup_url = "https://claude.ai/artifact/KW48b7hRrEpia7Q5hnQwd6"   # separate sign-up page; anyone who signs up there gets the Monday email
+extra_recipients = []
+
+# ---- Industry voices & academics -------------------------------------------
+# People whose commentary on synthetic research matters. Each is searched by
+# name (news + LinkedIn) and matched in titles/snippets. Starter list: verify
+# affiliations and add the voices your team follows. kind = "academic" | "industry"
+[[voices]]
+name = "Joon Sung Park"
+aliases = ["Joon Sung Park", "Joon Park"]
+affiliation = "Stanford / Simile"
+kind = "academic"
+
+[[voices]]
+name = "Michael Bernstein"
+aliases = ["Michael Bernstein"]
+affiliation = "Stanford"
+kind = "academic"
+
+[[voices]]
+name = "Percy Liang"
+aliases = ["Percy Liang"]
+affiliation = "Stanford"
+kind = "academic"
+
+[[voices]]
+name = "Lisa Argyle"
+aliases = ["Lisa Argyle", "Lisa P. Argyle"]
+affiliation = "BYU (silicon sampling)"
+kind = "academic"
+
+[[voices]]
+name = "David Wingate"
+aliases = ["David Wingate"]
+affiliation = "BYU"
+kind = "academic"
+
+[[voices]]
+name = "John Horton"
+aliases = ["John Horton", "John J. Horton"]
+affiliation = "MIT (Homo silicus)"
+kind = "academic"
+
+[[voices]]
+name = "Olivier Toubia"
+aliases = ["Olivier Toubia"]
+affiliation = "Columbia Business School"
+kind = "academic"
+
+[[voices]]
+name = "Ayelet Israeli"
+aliases = ["Ayelet Israeli"]
+affiliation = "Harvard Business School"
+kind = "academic"
+
+[[voices]]
+name = "Ethan Mollick"
+aliases = ["Ethan Mollick"]
+affiliation = "Wharton"
+kind = "academic"
+
+[[voices]]
+name = "Ray Poynter"
+aliases = ["Ray Poynter"]
+affiliation = "NewMR"
+kind = "industry"
+
+[[voices]]
+name = "Lenny Murphy"
+aliases = ["Lenny Murphy", "Leonard Murphy"]
+affiliation = "Greenbook"
+kind = "industry"
+
+[[voices]]
+name = "Jon Puleston"
+aliases = ["Jon Puleston"]
+affiliation = "Kantar"
+kind = "industry"
+
+[[voices]]
+name = "Mark Ritson"
+aliases = ["Mark Ritson"]
+affiliation = "Marketing columnist"
+kind = "industry"
+
+[[voices]]
+name = "Peter Weinberg"
+aliases = ["Peter Weinberg"]
+affiliation = "Evidenza co-founder"
+kind = "industry"
+
+[[voices]]
+name = "Jon Lombardo"
+aliases = ["Jon Lombardo"]
+affiliation = "Evidenza co-founder"
+kind = "industry"
+
+# Academic coverage: papers from arXiv (official API) plus news/LinkedIn about
+# studies. An item counts as academic if its text or URL contains one of `terms`.
+[academic]
+terms = ["university", "professor", "business school", "arxiv", "ssrn", "working paper", "journal",
+         "peer-review", "pew research", "phd", "institute of technology", "researchers at", "academic",
+         "nber", ".edu"]
+# arXiv API search syntax (abs: = abstract, ti: = title)
+arxiv_queries = [
+  'abs:"synthetic respondents"',
+  'abs:"silicon sampling"',
+  'abs:"silicon samples"',
+  'abs:"synthetic personas"',
+  'abs:"synthetic survey"',
+  'abs:"homo silicus"',
+  'abs:"digital twins" AND (abs:"survey respondents" OR abs:"consumers" OR abs:"public opinion")',
+  'abs:"large language models" AND abs:"survey responses" AND abs:"simulat"',
+  'abs:"LLM" AND abs:"market research"',
+  'abs:"LLM" AND abs:"public opinion" AND abs:"simulat"',
+]
+# arXiv papers must mention one of these to be kept.
+relevance_terms = ["respondent", "survey respon", "survey data", "public opinion", "poll", "market research",
+                   "consumer", "persona", "silicon sampl", "silicon subject", "homo silicus", "synthetic sample",
+                   "synthetic survey", "synthetic panel", "questionnaire", "social science", "simulated human",
+                   "human participants", "focus group"]
+# Name-free searches that surface studies and commentators not on any list.
+discovery_queries = [
+  '"synthetic respondents" (study OR professor OR researchers OR paper)',
+  '"silicon sampling" OR "homo silicus"',
+  '"digital twins" (survey OR consumers) (study OR professor OR researchers)',
+  '"synthetic data" "market research" (opinion OR column OR interview)',
+]
+
+# ---- Classification rules --------------------------------------------------
+# Signal types: what kind of move is this item evidence of?
+[signals]
+"Leadership change"    = ["appoint", " ceo", "chief executive", "steps down", "transition", "names new", "hires"]
+"Product launch"       = ["launch", "introduc", "unveil", "now available", "new product", "release", "beta", "debut", "rolls out", "rolled out"]
+"Partnership / M&A"    = ["partner", "acqui", "merger", "integration with", "collaborat", "teams up", "alliance", "joins forces"]
+"Funding"              = ["raise", "funding", "series a", "series b", "seed round", "investor", " valuation"]
+"Validation claim"     = ["accura", "validat", "correlat", "match rate", "benchmark", "% of", "parity", "replicat"]
+"Hiring"               = ["hiring", "we're looking for", "join our team", "job opening", "open role"]
+"Pricing / packaging"  = ["pricing", "per respondent", "cost", "cheaper", "subscription", "free trial"]
+"Events / thought leadership" = ["webinar", "keynote", "panel", "conference", "esomar", "iiex", "quirks", "mrs ", "whitepaper", "report"]
+"Skepticism / risk"    = ["hallucinat", "bias", "risk", "concern", "can't replace", "cannot replace", "skeptic", "caution", "limitation"]
+
+# Capability tags: what part of the synthetic offering is being discussed?
+[capabilities]
+"Synthetic respondents / sample" = ["synthetic respondent", "synthetic sample", "synthetic panel", "silicon sampl", "ai respondent"]
+"Digital twins"                  = ["digital twin"]
+"Personas"                       = ["persona", "virtual audience"]
+"Sample boosting / augmentation" = ["boost", "augment", "imput", "low-incidence", "hard-to-reach", "fill quota"]
+"Concept / ad testing"           = ["concept test", "ad test", "creative test", "pre-test", "screener"]
+"AI-moderated qual"              = ["ai moderat", "ai interview", "conversational", "qual at scale"]
+"Data privacy / synthetic data"  = ["privacy", "gdpr", "anonymi", "synthetic data"]

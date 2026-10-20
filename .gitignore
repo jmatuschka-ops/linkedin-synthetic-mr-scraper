@@ -1,0 +1,17 @@
+# Secrets: never commit
+keys.env
+*.env
+!keys.env.example
+
+# Generated / collected data (rebuilt by each run)
+data/
+reports/
+__pycache__/
+
+# Posts saved by hand stay local; the template is shared
+inbox/*
+!inbox/_TEMPLATE.txt
+
+# Local tooling
+.claude/
+.DS_Store
