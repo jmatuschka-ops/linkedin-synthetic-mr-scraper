@@ -70,6 +70,15 @@ exclude_terms = ["market size", "market share", "cagr", "industry report", "augm
                  "smart city", "aerospace", "oil and gas", "power grid", "construction", "farming",
                  "agricultur", "mining", "mineral"]
 
+# ---- Qualtrics (for comparison) ---------------------------------------------
+# Shown alongside competitors. require_topic: only items that are actually about synthetic
+# research count, since most Qualtrics coverage isn't. Add Qualtrics product names as aliases.
+[[competitors]]
+name = "Qualtrics"
+aliases = ["Qualtrics"]
+segment = "self"
+require_topic = true
+
 # ---- Competitors -----------------------------------------------------------
 # Pure-play synthetic vendors
 [[competitors]]

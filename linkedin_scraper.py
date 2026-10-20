@@ -616,7 +616,8 @@ def classify(item: dict, cfg: dict) -> dict:
     text = f'{item["title"]} {item["snippet"]}'
     low = text.lower()
     comps = [c["name"] for c in cfg["competitors"] if any(p.search(text) for p in c["_patterns"])
-             and not any(x in low for x in c["exclude"])]
+             and not any(x in low for x in c["exclude"])
+             and (not c.get("require_topic") or _about_synthetic(item) or (item.get("source") != "tavily" and _SYNTH_TOPIC.search(text)))]
     sigs = [k for k, kws in cfg["signals"].items() if any(kw in low for kw in kws)]
     if item.get("source") == "arxiv":
         sigs = [x for x in sigs if x in ("Validation claim", "Skepticism / risk")]
@@ -1177,7 +1178,7 @@ def _arrow(cur: int, prev: int) -> str:
 # HTML report
 # --------------------------------------------------------------------------
 
-def _heat(matrix: dict, rows: list[str], cols: list[str], row_label: str) -> str:
+def _heat(matrix: dict, rows: list[str], cols: list[str], row_label: str, highlight: str = "Qualtrics") -> str:
     peak = max([v for r in matrix.values() for v in r.values()] or [1])
     head = "".join(f"<th>{html.escape(c)}</th>" for c in cols)
     body = []
@@ -1187,7 +1188,7 @@ def _heat(matrix: dict, rows: list[str], cols: list[str], row_label: str) -> str
             v = matrix[r].get(c, 0)
             a = 0 if not v else 0.12 + 0.75 * v / peak
             cells.append(f'<td class="n" style="--a:{a:.2f}">{v or ""}</td>')
-        body.append(f"<tr><th class='rh'>{html.escape(r)}</th>{''.join(cells)}</tr>")
+        body.append(f"<tr{' class=self' if r == highlight else ''}><th class='rh'>{html.escape(r)}</th>{''.join(cells)}</tr>")
     return (f"<div class='scroll'><table class='heat'><thead><tr><th>{row_label}</th>{head}</tr>"
             f"</thead><tbody>{''.join(body)}</tbody></table></div>")
 
@@ -1223,6 +1224,18 @@ def _more(rows: list[str], n: int, cls: str, empty: str = "") -> str:
 def _dlabel(it: dict) -> str:
     """Publish date, or when we first found it for pages LinkedIn doesn't date (articles, company pages)."""
     return html.escape(it["date"] if it.get("dated", True) else f"found {it['date']}")
+
+
+SEGMENT_LABEL = {"pure-play": "synthetic-native", "incumbent": "established firm",
+                 "platform": "research platform", "self": "us"}
+SEGMENT_LEGEND = ("<p class='legend'><b>Synthetic-native</b>: synthetic research is the core business · "
+                  "<b>Established firm</b>: research or panel company adding synthetic offerings · "
+                  "<b>Research platform</b>: research software with synthetic features · "
+                  "<b>Us</b>: Qualtrics, shown for comparison</p>")
+
+
+def _seg(seg: dict, c: str) -> str:
+    return html.escape(SEGMENT_LABEL.get(seg.get(c, ""), seg.get(c, "")))
 
 
 def _plabel(p: int) -> str:
@@ -1333,7 +1346,7 @@ def _trends_section(cfg, p, cur, prev, briefs, earliest, seg, first_run) -> str:
     names = sorted(set(t["comp_cur"]) | set(t["comp_prev"]),
                    key=lambda c: (-t["comp_cur"].get(c, 0), -t["comp_prev"].get(c, 0)))
     mom_rows = "".join(
-        f"<tr><th class='rh'>{html.escape(c)} <small>{html.escape(seg.get(c, ''))}</small></th>"
+        f"<tr{' class=self' if seg.get(c) == 'self' else ''}><th class='rh'>{html.escape(c)} <small>{_seg(seg, c)}</small></th>"
         f"<td class='num'>{t['comp_cur'].get(c, 0)}</td><td class='num'>{t['comp_prev'].get(c, 0)}</td>"
         f"<td class='num'>{_arrow(t['comp_cur'].get(c, 0), t['comp_prev'].get(c, 0))} "
         f"{_pct(t['comp_cur'].get(c, 0), t['comp_prev'].get(c, 0))}</td>"
@@ -1345,7 +1358,8 @@ def _trends_section(cfg, p, cur, prev, briefs, earliest, seg, first_run) -> str:
                 f"<tbody>{mom_rows or '<tr><td colspan=6>No competitor mentions.</td></tr>'}</tbody></table></div>"
                 "<p class='foot foot-out'>Items = LinkedIn posts and articles, news stories and papers that name the "
                 "competitor (or one of its products) in the period. An item naming several competitors counts for each. "
-                "Company pages and job listings aren't counted. Undated items count from the date they were found.</p>")
+                "Company pages and job listings aren't counted. Undated items count from the date they were found.</p>"
+                + SEGMENT_LEGEND)
 
     # --- Names not on the watchlist ----------------------------------------
     emerging = emerging_names(cur, cfg)
@@ -1393,10 +1407,12 @@ def _beyond_section(cfg, p, cur) -> str:
         f"{html.escape(vmeta[v].get('affiliation', ''))}</small></span><b>{len(its)}</b></div>"
         f"<div class='meta'>Latest: {_link(its[0], _clean_title(its[0]['title']))} · {html.escape(its[0]['date'])}</div></li>"
         for v, its in sorted(by_voice.items(), key=lambda kv: -len(kv[1]))]
-    quiet = len(vmeta) - len(by_voice)
-    voices_html = (_more(vrows, 4, "moves", "<li class='mut'>No tracked voices mentioned this period.</li>")
-                   + f"<p class='mut' style='margin:6px 0 0'>{quiet} of {len(vmeta)} tracked voices not seen this period. "
-                   f"Edit the list under <code>[[voices]]</code> in config.toml.</p>")
+    quiet = [v for v in vmeta if v not in by_voice]
+    voices_html = _more(vrows, 4, "moves", "<li class='mut'>No tracked voices mentioned this period.</li>")
+    if quiet:
+        voices_html += ("<p class='quiet'><span class='lbl'>Also tracked, not seen this period</span> "
+                        + ", ".join(f"{html.escape(v)} <small>({html.escape(vmeta[v].get('affiliation', ''))})</small>"
+                                    for v in quiet) + "</p>")
 
     # --- academic & research ------------------------------------------------
     acad = [i for i in cur if i.get("kind") == "Academic"]
@@ -1457,7 +1473,7 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
             cap_m[c].update(it["capabilities"])
     channel_count = Counter(it["channel"] for it in items)
     new_items = [it for it in items if last_run and it["first_seen"] == last_run]
-    market_caps = Counter(c for it in items for c in it["capabilities"])
+    market_caps = Counter(c for it in items if it.get("url_type") not in NOT_ACTIVITY for c in it["capabilities"])
 
     def row(it):
         return (f"<tr><td class='d'>{_dlabel(it)}</td>"
@@ -1466,10 +1482,10 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
                 f"<div>{_tags(it)}{_att_badges(it['att']) if 'att' in it else ''}</div></td></tr>")
 
     brief_html = "".join(
-        f"<article class='brief'><h3>{html.escape(c)} <small>{html.escape(seg.get(c, ''))} · "
+        f"<article class='brief'><h3>{html.escape(c)} <small>{_seg(seg, c)} · "
         f"{html.escape(b['created'][:10])}</small></h3><pre>{html.escape(b['body'])}</pre></article>"
         for c, b in sorted(briefs.items(), key=lambda kv: -comp_count.get(kv[0], 0)) if not c.startswith("_"))
-    lb = _more([f"<li><span>{html.escape(c)} <small>{html.escape(seg.get(c, ''))}</small></span><b>{n}</b></li>"
+    lb = _more([f"<li{' class=self' if seg.get(c) == 'self' else ''}><span>{html.escape(c)} <small>{_seg(seg, c)}</small></span><b>{n}</b></li>"
                 for c, n in comp_count.most_common()], 7, "lb")
     caps = _more([f"<li><span>{html.escape(c)}</span><b>{n}</b></li>" for c, n in market_caps.most_common()], 7, "lb")
     hidden = "" if p == cfg["settings"]["default_period"] else " hidden"
@@ -1487,8 +1503,9 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
  <div class="kpi"><b>{len(comps)}</b>competitors active</div>
 </div>
 <div class="cols">
- <div class="panel"><h3>Share of voice</h3>{lb or "<ul class='lb'><li>No data yet</li></ul>"}</div>
- <div class="panel"><h3>Capabilities discussed (market-wide)</h3>{caps or "<ul class='lb'><li>No data yet</li></ul>"}</div>
+ <div class="panel"><h3>Share of voice <small>· items naming each company</small></h3>{lb or "<ul class='lb'><li>No data yet</li></ul>"}</div>
+ <div class="panel"><h3>Capabilities discussed <small>· items mentioning each, market-wide</small></h3>{caps or "<ul class='lb'><li>No data yet</li></ul>"}
+ <p class='foot'>Number of items (posts, articles, news, papers) that mention each capability, across everything collected, not only the watchlist. An item mentioning a capability many times counts once, and an item can mention several. Company pages and job listings aren't counted.</p></div>
 </div>
 <h3 class="sub">Competitor × signal type</h3>{_heat(sig_m, comps, sig_cols, "Competitor")}
 <h3 class="sub">Competitor × capability</h3>{_heat(cap_m, comps, cap_cols, "Competitor")}
@@ -1746,6 +1763,9 @@ h3.sub{{font-size:14px;margin:26px 0 10px;color:var(--fg)}}
 h4{{font:500 11px var(--f-mono);margin:18px 0 8px;color:var(--mut);text-transform:uppercase;letter-spacing:.08em}}
 .panel,.kpi,.brief{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;min-width:0}}
 .cols{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:14px;align-items:start}}
+.legend{{font-size:12px;color:var(--mut);margin:6px 0 0}}.legend b{{color:var(--fg);font-weight:500}}
+.quiet{{font-size:13px;color:var(--mut);margin:12px 0 0;padding-top:10px;border-top:1px solid var(--soft)}}.quiet .lbl{{display:block;margin-bottom:4px}}
+tr.self th,tr.self td.num,li.self{{color:var(--acc)}}tr.self th::after,li.self span::after{{content:" ◆";font-size:10px}}
 .rank-head{{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:10px}}
 .rank-head h3{{margin:0}}.rank-head .lbl{{flex:0 0 72px;text-align:right;white-space:nowrap}}
 .cols-wide{{grid-template-columns:minmax(0,1.7fr) minmax(0,1fr)}}
