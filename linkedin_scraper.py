@@ -157,8 +157,22 @@ def norm_date(s: str) -> str:
         return ""
 
 
+def linkedin_date(url: str) -> str:
+    """LinkedIn post ids (activity/ugcPost/share) carry their creation time in the top 41 bits
+    (milliseconds since the Unix epoch), so a post URL dates the post even when the search
+    result doesn't."""
+    m = re.search(r"(?:activity|ugcPost|share)[-:%3A]+(\d{18,20})", url or "")
+    if not m:
+        return ""
+    try:
+        d = datetime.fromtimestamp((int(m.group(1)) >> 22) / 1000, timezone.utc).date()
+    except (OverflowError, OSError, ValueError):
+        return ""
+    return d.isoformat() if date(2015, 1, 1) <= d <= today() else ""
+
+
 def item_date(it: dict) -> str:
-    return norm_date(it.get("published", "")) or it["first_seen"][:10]
+    return norm_date(it.get("published", "")) or linkedin_date(it.get("url", "")) or it["first_seen"][:10]
 
 
 # --------------------------------------------------------------------------
@@ -226,15 +240,20 @@ def _num(s: str) -> int:
         return 0
 
 
-def parse_engagement(*texts: str) -> dict:
+def parse_engagement(*texts: str, max_from_text: int | None = None) -> dict:
     """Reaction / comment / repost counts as search engines show them for
     LinkedIn posts, e.g. "412 reactions · 58 comments" or "1.2K+ likes"."""
     out = {"reactions": 0, "comments": 0, "reposts": 0}
-    for t in texts:
+    for i, t in enumerate(texts):
         for n, kind in _ENG.findall(t or ""):
             k = kind.lower()
             key = "comments" if k.startswith("comment") else "reposts" if k.startswith(("repost", "share")) else "reactions"
-            out[key] = max(out[key], _num(n))
+            v = _num(n)
+            # Text after the first argument (the title) is scraped page text, where adjacent
+            # numbers run together; ignore implausibly large values from it.
+            if max_from_text and i > 0 and v > max_from_text:
+                continue
+            out[key] = max(out[key], v)
     return out
 
 
@@ -466,7 +485,7 @@ def collect_tavily(cfg: dict, days: int, stats: list):
                 "snippet": content[:1200],
                 "published": r.get("published_date") or "",
                 "rank": rank,
-                "engagement": parse_engagement(r.get("title", ""), content),
+                "engagement": parse_engagement(r.get("title", ""), content, max_from_text=2000),
                 "query": q, "source": "tavily",
             }
         stats.append({"source": "tavily", "query": q, "results": len(results),
@@ -603,6 +622,7 @@ def classify(item: dict, cfg: dict) -> dict:
 
 
 _PERSON = r"[A-Z][a-zA-Z'\-]+(?:\s+[A-Z]\.)?(?:\s+[A-Z][a-zA-Z'\-]+){1,2}"
+_PERSON_INITIAL = r"[A-Z][a-zA-Z'\-]+\s+[A-Z]\."      # "Netali J." (LinkedIn's shortened names)
 # Headline words that look like names in "X Y: headline" patterns but aren't.
 _NOT_PERSON = set("""the a an artificial intelligence synthetic users data research insights market markets
 digital modern milestones early scale explained ai new report study survey guide why how what top best
@@ -625,11 +645,20 @@ def extract_author(item: dict, channel: str) -> str:
     professor/researcher named in a news headline or snippet."""
     title = item.get("title", "")
     if channel == "linkedin":
-        for pat in (rf"^({_PERSON}) on LinkedIn:", rf"^({_PERSON})'s Post", rf"\|\s*({_PERSON})\s*$",
-                    rf"^({_PERSON})\s+[-–]\s+.*LinkedIn"):
+        for pat in (rf"^({_PERSON}) on LinkedIn:", rf"^({_PERSON})'s Post",
+                    rf"\|\s*({_PERSON}) posted on the topic",                       # "... | Olivia Wang posted on the topic | LinkedIn"
+                    rf"\|\s*({_PERSON})\s*(?:\.\.\.|…)?\s*(?:\|\s*[\d,.]+[KkMm]?\+?\s*comments?\s*)?$",  # "... | Peter Weinberg ..." / "| Mark Ritson | 393 comments"
+                    rf"^({_PERSON})\s*\|\s*[\d,.]+\s*comments?",                # "Byron Sharp | 34 comments"
+                    rf"^({_PERSON}|{_PERSON_INITIAL})\s+[-–]\s+"):              # "Netali J. - Market research today"
             m = re.search(pat, title)
             if m:
                 return m.group(1)
+        # The post URL starts with the poster's profile name: /posts/netali-jakubovitz_...
+        m = re.search(r"linkedin\.com/posts/([a-z][a-z\-]+?)(?:-[a-z0-9]*\d[a-z0-9]*)?_", item.get("url", ""))
+        if m and "-" in m.group(1):
+            words = [w for w in m.group(1).split("-") if w and w not in ("com", "inc", "llc", "ltd", "official", "hq")]
+            if 2 <= len(words) <= 4:
+                return " ".join(w.capitalize() for w in words)
     # Columns and webinar write-ups: "Mark Ritson: …", "…: Vijay Raj at MRSI webinar"
     m = re.match(rf"({_PERSON}):\s", title) or re.search(rf"[:,]\s+({_PERSON})\s+at\s+[A-Z]", title)
     if m:
