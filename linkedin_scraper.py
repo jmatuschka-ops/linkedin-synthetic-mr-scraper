@@ -1238,6 +1238,23 @@ def _seg(seg: dict, c: str) -> str:
     return html.escape(SEGMENT_LABEL.get(seg.get(c, ""), seg.get(c, "")))
 
 
+def _filterbar(items: list[dict]) -> str:
+    """Keyword box plus source chips and a competitor menu; filters the table that follows it."""
+    if not items:
+        return ""
+    names = {"linkedin": "LinkedIn", "news": "News", "academic": "Academic", "manual": "Saved"}
+    chs = Counter(i["channel"] for i in items)
+    chips = "<button type='button' class='chip' aria-pressed='true' data-ch=''>All " + f"{len(items)}</button>" + "".join(
+        f"<button type='button' class='chip' aria-pressed='false' data-ch='{html.escape(k)}'>{names.get(k, k.title())} {v}</button>"
+        for k, v in chs.most_common())
+    comps = Counter(c for i in items for c in i["competitors"])
+    opts = "<option value=''>Any competitor</option>" + "".join(
+        f"<option value='{html.escape(c)}'>{html.escape(c)} ({n})</option>" for c, n in comps.most_common())
+    return (f"<div class='filters'><input class='q' type='search' placeholder='Filter by keyword, signal or capability…' aria-label='Filter items'>"
+            f"<div class='chips' role='group' aria-label='Source'>{chips}</div>"
+            f"<select class='qc' aria-label='Competitor'>{opts}</select><span class='fcount mut'></span></div>")
+
+
 def _plabel(p: int) -> str:
     return "Last week" if p == 7 else f"Last {p} days"
 
@@ -1248,6 +1265,8 @@ def _h2(sec: str, title: str, p: int | None = None) -> str:
 
 
 LINKEDIN_SOURCES = ("tavily", "brave", "serpapi")
+SOURCE_LABEL = {"tavily": "LinkedIn (via Tavily)", "brave": "LinkedIn (via Brave)", "serpapi": "LinkedIn (via SerpAPI)",
+                "news": "News (Google News)", "arxiv": "Academic (arXiv)", "inbox": "Saved posts (inbox)"}
 
 
 def _has_linkedin_source(last: dict | None, stats: list) -> bool:
@@ -1476,7 +1495,8 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
     market_caps = Counter(c for it in items if it.get("url_type") not in NOT_ACTIVITY for c in it["capabilities"])
 
     def row(it):
-        return (f"<tr><td class='d'>{_dlabel(it)}</td>"
+        hay = " ".join(it["competitors"] + it["signals"] + it["capabilities"] + it.get("voices", []))
+        return (f"<tr data-ch='{html.escape(it['channel'])}' data-tags='{html.escape(hay)}'><td class='d'>{_dlabel(it)}</td>"
                 f"<td class='d'><span class='ch ch-{html.escape(it['channel'])}'>{html.escape(it['channel'])}</span><br><small>{html.escape(it['url_type'])}</small></td>"
                 f"<td><div class='t'>{_link(it, it['title'])}</div><div class='sn'>{html.escape(it['snippet'][:320])}</div>"
                 f"<div>{_tags(it)}{_att_badges(it['att']) if 'att' in it else ''}</div></td></tr>")
@@ -1511,10 +1531,11 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
 <h3 class="sub">Competitor × capability</h3>{_heat(cap_m, comps, cap_cols, "Competitor")}
 {"<h3 class='sub'>AI briefs</h3><div class='briefs'>" + brief_html + "</div>" if brief_html else ""}
 <h3 class="sub">New this run</h3>
-<div class="scroll"><table class="feed"><tbody>{"".join(row(i) for i in new_items[:50]) or "<tr><td>Nothing new.</td></tr>"}</tbody></table></div>
+{_filterbar(new_items[:50])}
+<div class="scroll"><table class="feed filt"><tbody>{"".join(row(i) for i in new_items[:50]) or "<tr><td>Nothing new.</td></tr>"}</tbody></table></div>
 {_h2("items", "All items", p)}
-<input class="q" placeholder="Filter by competitor, signal, keyword…">
-<div class="scroll"><table class="feed all"><tbody>{"".join(row(i) for i in items) or "<tr><td>No items in this period.</td></tr>"}</tbody></table></div>
+{_filterbar(items)}
+<div class="scroll"><table class="feed all filt"><tbody>{"".join(row(i) for i in items) or "<tr><td>No items in this period.</td></tr>"}</tbody></table></div>
 </section>"""
 
 
@@ -1526,7 +1547,7 @@ def _coverage_section(cfg, stats, last, earliest) -> str:
         by_src[st["source"]].append(st)
     rows = ""
     for src, sts in by_src.items():
-        rows += (f"<tr><th class='rh'>{html.escape(src)}</th><td class='num'>{len(sts)}</td>"
+        rows += (f"<tr><th class='rh'>{html.escape(SOURCE_LABEL.get(src, src))}</th><td class='num'>{len(sts)}</td>"
                  f"<td class='num'>{sum(s['results'] for s in sts)}</td><td class='num'>{sum(s['kept'] for s in sts)}</td>"
                  f"<td class='num'>{sum(1 for s in sts if s['results'] == 0)}</td>"
                  f"<td class='num'>{sum(1 for s in sts if s['capped'])}</td>"
@@ -1691,8 +1712,11 @@ def render_html(cfg, all_items, briefs, last, stats, earliest, first_run) -> str
         ("overview", "Overview"), ("items", "All items"), ("coverage", "Coverage")))
     panels = "".join(_period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_counts) for p in periods)
     linkedin_on = _has_linkedin_source(last, stats)
-    used = [x for x in dict.fromkeys(st["source"] for st in stats if st["results"])]
-    sources = html.escape(" · ".join(used) or "—")
+    ch = Counter(i["channel"] for i in all_items)
+    names = {"linkedin": "LinkedIn", "news": "News", "academic": "Academic papers", "manual": "Saved posts"}
+    sources = " · ".join(f"{names.get(k, k.title())} {v:,}" for k, v in ch.most_common()) or "—"
+    if ch.get("linkedin"):
+        sources += " <span class='via'>(LinkedIn posts and articles found through Tavily search)</span>"
     setup = "" if linkedin_on else (
         "<aside class='setup' role='note'><span class='pill wait'>Setup</span><p><b>LinkedIn search is off.</b> "
         "This report currently draws on news coverage and arXiv only, so LinkedIn posts, and the reaction and "
@@ -1736,7 +1760,7 @@ code{{font:12px var(--f-mono);background:var(--soft);padding:1px 5px;border-radi
 .mast{{display:grid;gap:6px}}
 .kicker{{font:500 12px var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--acc)}}
 h1{{font:700 clamp(26px,4vw,36px)/1.1 var(--f-display);letter-spacing:-.01em;margin:0;text-wrap:balance}}
-.stamp{{display:flex;flex-wrap:wrap;gap:6px 16px;font:13px var(--f-mono);color:var(--mut)}}
+.stamp{{display:flex;flex-wrap:wrap;gap:6px 16px;font:13px var(--f-mono);color:var(--mut)}}.stamp .via{{font-family:var(--f-body)}}
 .setup{{display:flex;gap:12px;align-items:flex-start;background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);
 border-radius:12px;padding:12px 16px;margin-top:18px}}.setup p{{margin:0;max-width:80ch}}
 
@@ -1746,17 +1770,20 @@ padding:10px clamp(16px,3vw,32px);background:color-mix(in srgb,var(--bg) 92%,tra
 border-bottom:1px solid var(--line);display:flex;gap:10px 18px;flex-wrap:wrap;align-items:center}}
 .seg{{display:inline-flex;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:3px;gap:2px;
 max-width:100%;overflow-x:auto;scrollbar-width:none}}.seg button{{white-space:nowrap}}
-@media (max-width:600px){{.bar .lbl{{display:none}}.bar{{gap:8px}}}}
+@media (max-width:600px){{.bar .lbl{{display:none}}.bar{{gap:6px}}.jump button{{font-size:13px;padding:5px 10px}}}}
 .seg button{{font:500 13px var(--f-body);padding:6px 12px;border:0;border-radius:7px;background:transparent;color:var(--fg);cursor:pointer}}
 .seg button:hover{{background:var(--soft)}}
 .seg button[aria-pressed=true]{{background:var(--acc);color:var(--acc-fg)}}
-.jump{{display:flex;gap:4px;overflow-x:auto;min-width:0;flex:1 1 320px;scrollbar-width:none}}
-.jump button{{font:13px var(--f-body);white-space:nowrap;padding:6px 10px;border:0;border-radius:7px;background:transparent;color:var(--mut);cursor:pointer}}
-.jump button:hover{{color:var(--fg);background:var(--soft)}}
+.bar{{flex-direction:column;align-items:stretch;gap:8px}}
+.bar-row{{display:flex;align-items:center;gap:10px;min-width:0}}.bar-row .lbl{{flex:0 0 64px}}
+.jump{{display:flex;gap:6px;overflow-x:auto;min-width:0;scrollbar-width:none}}
+.jump button{{font:500 14px var(--f-body);white-space:nowrap;padding:6px 12px;border:1px solid var(--line);border-radius:99px;
+background:var(--card);color:var(--fg);cursor:pointer}}
+.jump button:hover{{border-color:var(--acc);color:var(--acc)}}
 .lbl{{font:500 11px var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}}
 
 /* sections */
-h2{{font:600 22px/1.2 var(--f-display);margin:48px 0 14px;scroll-margin-top:84px;text-wrap:balance}}
+h2{{font:600 22px/1.2 var(--f-display);margin:48px 0 14px;scroll-margin-top:124px;text-wrap:balance}}
 h2 .eyebrow{{display:block;font:500 11px var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin-bottom:4px}}
 h3{{font:600 15px/1.3 var(--f-body);margin:0 0 10px}}
 h3.sub{{font-size:14px;margin:26px 0 10px;color:var(--fg)}}
@@ -1825,7 +1852,13 @@ border:1px solid var(--soft);min-width:58px}}
 .ch{{display:inline-block;font:500 11px var(--f-mono);text-transform:uppercase;letter-spacing:.04em;color:var(--acc)}}
 .ch-academic{{color:var(--a2-fg)}}.ch-linkedin{{color:var(--c-fg)}}
 .sn{{color:var(--mut);font-size:13px;margin:4px 0 6px;max-width:90ch}}
-input.q{{width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg);font:inherit;margin:0 0 10px}}
+.filters{{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center;margin:0 0 10px}}
+input.q{{flex:1 1 260px;min-width:0;padding:9px 14px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg);font:inherit}}
+.chips{{display:flex;flex-wrap:wrap;gap:6px}}
+.chip{{font:500 13px var(--f-body);padding:6px 11px;border-radius:99px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}}
+.chip[aria-pressed=true]{{background:var(--acc);border-color:var(--acc);color:var(--acc-fg)}}
+select.qc{{font:inherit;font-size:14px;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg);max-width:100%}}
+.fcount{{font:12px var(--f-mono)}}
 input.q::placeholder{{color:var(--mut)}}
 
 /* briefs */
@@ -1855,13 +1888,13 @@ ul.ql{{font-size:13px;margin:4px 0 0}}details{{margin-top:10px}}summary{{cursor:
 <header class="mast">
  <span class="kicker">Competitive intel · synthetic research</span>
  <h1>LinkedIn Scraper: Synthetic Offerings in Market Research</h1>
- <div class="stamp"><span>Generated {stamp} UTC</span><span>Sources: {sources}</span><span>{len(all_items)} items collected</span></div>
+ <div class="stamp"><span>Generated {stamp} UTC</span><span>Sources: {sources}</span></div>
 </header>
 {setup}
 {_subscribe_html(cfg) if cfg.get("email", {}).get("hosted_url") else ""}
 <nav class="bar" aria-label="Report controls">
- <span class="lbl">Period</span><div class="seg" role="group" aria-label="Period">{buttons}</div>
- <div class="jump" aria-label="Jump to section">{jumps}</div>
+ <div class="bar-row"><span class="lbl">Period</span><div class="seg" role="group" aria-label="Period">{buttons}</div></div>
+ <div class="bar-row"><span class="lbl">Jump to</span><div class="jump" aria-label="Jump to section">{jumps}</div></div>
 </nav>
 {panels}
 {_coverage_section(cfg, stats, last, earliest)}
@@ -1903,9 +1936,17 @@ function balance(root){{(root||document).querySelectorAll('.cols').forEach(row=>
 }})}}
 const _show=show; show=function(p){{_show(p);balance(document.querySelector(`section[data-period="${{p}}"]`))}};
 window.addEventListener('load',()=>balance(document.querySelector('section.period:not([hidden])')));
-document.querySelectorAll('section.period').forEach(sec=>{{const q=sec.querySelector('input.q');
-q.addEventListener('input',e=>{{const v=e.target.value.toLowerCase();
-sec.querySelectorAll('table.all tr').forEach(r=>r.hidden=!r.textContent.toLowerCase().includes(v))}})}});
+document.querySelectorAll('.filters').forEach(f=>{{
+ const table=f.nextElementSibling.querySelector('table'), q=f.querySelector('input.q'), sel=f.querySelector('select.qc'), out=f.querySelector('.fcount');
+ let ch='';
+ function apply(){{const v=q.value.toLowerCase(), c=sel.value; let n=0;
+  table.querySelectorAll('tr[data-ch]').forEach(r=>{{const ok=(!ch||r.dataset.ch===ch)&&(!c||(' '+r.dataset.tags+' ').includes(c))&&(!v||r.textContent.toLowerCase().includes(v));
+   r.hidden=!ok; if(ok)n++}});
+  out.textContent=(v||c||ch)?n+' shown':''}}
+ f.querySelectorAll('.chip').forEach(b=>b.addEventListener('click',()=>{{ch=b.dataset.ch;
+  f.querySelectorAll('.chip').forEach(x=>x.setAttribute('aria-pressed',x===b));apply()}}));
+ q.addEventListener('input',apply); sel.addEventListener('change',apply);
+}});
 </script></body></html>"""
 
 
