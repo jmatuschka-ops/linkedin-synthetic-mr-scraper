@@ -18,11 +18,14 @@ lookback_days = 180
 report_periods = [7, 14, 30, 60, 90]
 default_period = 30
 
-# Tavily LinkedIn search (free tier: 1,000 searches/month; a weekly run uses ~50)
+# Tavily LinkedIn search (free tier: 1,000 searches/month; a weekly run uses ~60-90)
 [tavily]
 search_depth = "basic"          # "advanced" costs 2 credits per search
 max_results = 20
 include_domains = ["linkedin.com"]
+# A search that returns the full 20 results is re-run with each of these appended, to reach
+# posts beyond the first 20 (Tavily has no next page). Each costs one search.
+capped_variants = ["launch announcement", "study results accuracy"]
 
 # Search terms that define the "synthetic" space.
 [topics]

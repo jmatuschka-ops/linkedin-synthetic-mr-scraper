@@ -448,12 +448,38 @@ def collect_serpapi(cfg: dict, days: int, stats: list):
 
 def tavily_queries(cfg: dict) -> list[str]:
     # Tavily is a relevance-ranked search (OR/site: operators aren't needed; the domain is
-    # filtered with include_domains). One query per competitor name, topic and voice keeps a
-    # weekly run near 50 searches, well inside the free 1,000 a month.
+    # filtered with include_domains). One query per competitor, product name, topic and voice
+    # keeps a weekly run around 60-90 searches, inside the free 1,000 a month.
     qs = [f'"{c["name"]}" synthetic respondents digital twins AI personas' for c in cfg["competitors"]]
+    names = {c["name"].lower() for c in cfg["competitors"]}
+    for c in cfg["competitors"]:
+        for a in c["aliases"]:
+            # product names (PersonaBot, HarmonAIze, ...): long enough to be specific, not the company itself
+            squash = lambda x: re.sub(r"[^a-z0-9]", "", x.lower())   # "Brox.ai" == "Brox AI"
+            if (a.lower() not in names and len(a) > 5 and not a.isupper()
+                    and squash(c["name"]) not in squash(a) and squash(a) not in squash(c["name"])):
+                qs.append(f'"{a}" {c["name"]} synthetic')
     qs += [f'"{t}" market research' for t in cfg["topics"]["specific"] + cfg["topics"]["generic"]]
     qs += [f'"{v["name"]}" synthetic research' for v in cfg["voices"]]
-    return qs
+    return list(dict.fromkeys(qs))
+
+
+def _tavily_search(q: str, base: dict, key: str, delay: float) -> tuple[list, str]:
+    """One search, retried once when it comes back empty or fails (Tavily occasionally returns
+    nothing for a query that has results moments later)."""
+    err = ""
+    for attempt in range(2):
+        try:
+            data = http_post_json("https://api.tavily.com/search", {"query": q, **base},
+                                  {"Authorization": f"Bearer {key}"}, timeout=40)
+            results = data.get("results", [])
+            if results:
+                return results, ""
+            err = ""
+        except Exception as e:
+            err = str(e)[:200]
+        time.sleep(delay * 2)
+    return [], err
 
 
 def collect_tavily(cfg: dict, days: int, stats: list):
@@ -462,19 +488,16 @@ def collect_tavily(cfg: dict, days: int, stats: list):
         print("  - skipping tavily: TAVILY_API_KEY not set", file=sys.stderr)
         return
     t = cfg.get("tavily", {})
+    delay = cfg["settings"]["request_delay_seconds"]
     base = {"search_depth": t.get("search_depth", "basic"), "max_results": min(int(t.get("max_results", 20)), 20),
             "include_domains": t.get("include_domains", ["linkedin.com"]), "include_raw_content": False}
-    window = {"start_date": (today() - timedelta(days=days)).isoformat(), "end_date": today().isoformat()}
-    for q in tavily_queries(cfg):
-        err, results = "", []
-        for extra in (window, {"time_range": "year"}):  # fall back if date filters are refused
-            try:
-                data = http_post_json("https://api.tavily.com/search", {"query": q, **base, **extra},
-                                      {"Authorization": f"Bearer {key}"}, timeout=40)
-                results, err = data.get("results", []), ""
-                break
-            except Exception as e:
-                err = str(e)[:200]
+    # No date filter: Tavily rarely knows when a LinkedIn page was published, so date filters
+    # silently drop most LinkedIn results. Posts are dated from their URL instead (linkedin_date).
+    variants = t.get("capped_variants", [])
+    queue = [(q, q) for q in tavily_queries(cfg)]
+    while queue:
+        q, parent = queue.pop(0)
+        results, err = _tavily_search(q, base, key, delay)
         if err:
             print(f"  ! tavily query failed ({err}): {q}", file=sys.stderr)
         for rank, r in enumerate(results, 1):
@@ -488,9 +511,12 @@ def collect_tavily(cfg: dict, days: int, stats: list):
                 "engagement": parse_engagement(r.get("title", ""), content, max_from_text=2000),
                 "query": q, "source": "tavily",
             }
-        stats.append({"source": "tavily", "query": q, "results": len(results),
-                      "capped": len(results) >= base["max_results"], "error": err})
-        time.sleep(cfg["settings"]["request_delay_seconds"])
+        capped = len(results) >= base["max_results"]
+        stats.append({"source": "tavily", "query": q, "results": len(results), "capped": capped, "error": err})
+        # Tavily has no next page: a query that fills the limit is widened with variant phrasings.
+        if capped and q == parent:
+            queue[0:0] = [(f"{q} {v}", parent) for v in variants]
+        time.sleep(delay)
 
 
 ATOM = {"a": "http://www.w3.org/2005/Atom"}
@@ -676,6 +702,9 @@ def is_relevant(item: dict, cfg: dict) -> bool:
     rel = cfg.get("relevance", {})
     if any(t in low for t in rel.get("exclude_terms", [])):
         return False
+    if item.get("channel") == "linkedin" and (item.get("url_type") == "profile" or "/top-content/" in item["url"]):
+        # Personal profile pages and LinkedIn's SEO "top content" pages aren't posts; skip them.
+        return False
     if item["source"] == "arxiv":
         # arXiv queries are broad ("survey" also means literature review there)
         return any(t in low for t in cfg["academic"].get("relevance_terms", [])) or bool(item["competitors"])
@@ -759,6 +788,7 @@ def load_items(db: sqlite3.Connection, days: int, cfg: dict | None = None) -> li
             if not is_relevant(d, cfg):
                 continue
         d["date"] = item_date(d)
+        d["dated"] = bool(norm_date(d.get("published", "")) or linkedin_date(d.get("url", "")))
         if d["date"] >= cutoff:
             out.append(d)
     out.sort(key=lambda d: (d["date"], d["first_seen"]), reverse=True)
@@ -979,23 +1009,23 @@ def _attention_section(cfg, p, cur, any_counts: bool = True) -> str:
         who = f" · {html.escape(it['author'])}" if it.get("author") else ""
         bar = f"<span class='meter' style='--w:{max(4, round(100 * score / top_score))}%'></span>"
         return (f"<li><div class='vh'><div class='t'>{_link(it, _clean_title(it['title']))}</div>{bar}</div>"
-                f"<div class='meta'>{html.escape(it['date'])} · {html.escape(it['channel'])}{who} "
+                f"<div class='meta'>{_dlabel(it)} · {html.escape(it['channel'])}{who} "
                 f"{_att_badges(it['att'], cov)}</div></li>")
 
-    top_html = "".join(li(*x) for x in ranked[:10]) or "<li class='mut'>No items this period.</li>"
+    top_html = _more([li(*x) for x in ranked[:12]], 6, "moves rank", "<li class='mut'>No items this period.</li>")
 
     # Most discussed: comment counts, with a debate flag when comments are high relative to reactions.
-    talk = sorted((i for i in cur if i["att"]["comments"]), key=lambda i: -i["att"]["comments"])[:8]
+    talk = sorted((i for i in cur if i["att"]["comments"]), key=lambda i: -i["att"]["comments"])[:10]
     def tli(it):
         a = it["att"]
         ratio = a["comments"] / a["reactions"] if a["reactions"] else 0
         debate = " <span class='badge hot'>debate</span>" if a["comments"] >= 10 and ratio >= 0.2 else ""
         return (f"<li><div class='t'>{_link(it, _clean_title(it['title']))}</div><div class='meta'>"
-                f"{html.escape(it['date'])}{' · ' + html.escape(it['author']) if it.get('author') else ''} "
+                f"{_dlabel(it)}{' · ' + html.escape(it['author']) if it.get('author') else ''} "
                 f"{_att_badges(a)}{debate}</div></li>")
     has_counts = any(i["att"]["reactions"] or i["att"]["comments"] for i in cur)
     if talk:
-        talk_html = "<ul class='moves'>" + "".join(tli(i) for i in talk) + "</ul>"
+        talk_html = _more([tli(i) for i in talk], 6, "moves")
     else:
         talk_html = ("<p class='mut'>No comment counts in this period. Counts come from LinkedIn search results "
                      "or from <code>comments:</code> / <code>reactions:</code> lines in inbox files.</p>")
@@ -1010,17 +1040,17 @@ def _attention_section(cfg, p, cur, any_counts: bool = True) -> str:
         # Nothing to rank by comments anywhere yet: one full-width panel instead of an empty second one.
         return f"""
 {_h2("rising", "Rising to the top", p)}
-<div class="panel"><h3>Most worth reading <small>· attention score</small></h3>{note}<ul class="moves rank">{top_html}</ul>
+<div class="panel"><h3>Most worth reading <small>· attention score</small></h3>{note}{top_html}
  {explain}
  <p class="foot"><b>Most discussed</b> (posts ranked by comment count, with debates flagged) appears here once
  reaction and comment counts come in. They come from LinkedIn search results, or from counts added to inbox files.</p></div>"""
     return f"""
 {_h2("rising", "Rising to the top", p)}
-<div class="cols">
- <div class="panel"><h3>Most worth reading <small>· attention score</small></h3>{note}<ul class="moves rank">{top_html}</ul>
-  {explain}</div>
+<div class="cols cols-wide">
+ <div class="panel"><h3>Most worth reading <small>· attention score</small></h3>{note}{top_html}</div>
  <div class="panel"><h3>Most discussed <small>· by comments</small></h3>{talk_html}</div>
-</div>"""
+</div>
+{explain.replace("class='foot'", "class='foot foot-out'")}"""
 
 
 # --------------------------------------------------------------------------
@@ -1160,6 +1190,23 @@ def _link(it: dict, text: str) -> str:
     return f"<a href='{link}' target='_blank' rel='noopener'>{text}</a>" if link else text
 
 
+def _more(rows: list[str], n: int, cls: str, empty: str = "") -> str:
+    """A list showing its first n rows, with the rest behind a "Show more" toggle, so cards that
+    sit side by side stay a similar height without dropping anything."""
+    if not rows:
+        return f"<ul class='{cls}'>{empty}</ul>" if empty else ""
+    out = f"<ul class='{cls}'>{''.join(rows[:n])}</ul>"
+    if len(rows) > n:
+        out += (f"<details class='more'><summary>Show {len(rows) - n} more</summary>"
+                f"<ul class='{cls}'>{''.join(rows[n:])}</ul></details>")
+    return out
+
+
+def _dlabel(it: dict) -> str:
+    """Publish date, or when we first found it for pages LinkedIn doesn't date (articles, company pages)."""
+    return html.escape(it["date"] if it.get("dated", True) else f"found {it['date']}")
+
+
 def _plabel(p: int) -> str:
     return "Last week" if p == 7 else f"Last {p} days"
 
@@ -1247,7 +1294,7 @@ def _trends_section(cfg, p, cur, prev, briefs, earliest, seg, first_run) -> str:
     stories = cluster_stories(key_items)
     stories.sort(key=lambda m: (len(m), bool(m[0]["competitors"]), max(i["date"] for i in m)), reverse=True)
     move_rows = []
-    for m in stories[:8]:
+    for m in stories[:10]:
         lead = max(m, key=lambda i: len(i["snippet"]))
         comps = sorted({c for i in m for c in i["competitors"]})
         sigs = sorted({s for i in m for s in i["signals"] if s in KEY_SIGNALS})
@@ -1257,7 +1304,7 @@ def _trends_section(cfg, p, cur, prev, briefs, earliest, seg, first_run) -> str:
             f"<div class='meta'>{html.escape(max(i['date'] for i in m))} · {cov} "
             + "".join(f"<span class='tag c'>{html.escape(c)}</span>" for c in comps)
             + "".join(f"<span class='tag s'>{html.escape(s)}</span>" for s in sigs) + "</div></li>")
-    moves_html = "".join(move_rows) or "<li class='mut'>No launches, deals, funding, leadership or validation news this period.</li>"
+    moves_html = _more(move_rows, 5, "moves", "<li class='mut'>No launches, deals, funding, leadership or validation news this period.</li>")
 
     # --- Momentum table ---------------------------------------------------
     sig_by, cap_by = defaultdict(Counter), defaultdict(Counter)
@@ -1281,19 +1328,19 @@ def _trends_section(cfg, p, cur, prev, briefs, earliest, seg, first_run) -> str:
 
     # --- Names not on the watchlist ----------------------------------------
     emerging = emerging_names(cur, cfg)
-    em_html = "".join(f"<li><span><b>{html.escape(n)}</b> <small>{html.escape(ex[:110])}</small></span><b>{k}</b></li>"
-                      for n, k, ex in emerging) or "<li class='mut'>None detected.</li>"
+    em_html = _more([f"<li><span><b>{html.escape(n)}</b> <small>{html.escape(ex[:110])}</small></span><b>{k}</b></li>"
+                     for n, k, ex in emerging], 5, "lb", "<li class='mut'>None detected.</li>")
 
     return f"""
 {_h2("summary", "Summary &amp; recent trends", p)}
 <div class="cols">
  <div class="panel"><h3>At a glance</h3><ul class="glance">{glance_html}</ul></div>
- {ai_html or '<div class="panel"><h3>Key moves</h3><ul class="moves">' + moves_html + '</ul></div>'}
+ {ai_html or '<div class="panel"><h3>Key moves</h3>' + moves_html + '</div>'}
 </div>
-{'<div class="panel" style="margin-top:12px"><h3>Key moves</h3><ul class="moves">' + moves_html + '</ul></div>' if ai_html else ''}
+{'<div class="panel" style="margin-top:12px"><h3>Key moves</h3>' + moves_html + '</div>' if ai_html else ''}
 <h3 class="sub">Momentum vs prior {p} days</h3>{mom_html}
 <div class="panel" style="margin-top:12px"><h3>Names not on your watchlist <small>· launching, raising or partnering in this coverage; consider adding to config.toml</small></h3>
-<ul class="lb">{em_html}</ul></div>"""
+{em_html}</div>"""
 
 
 def _beyond_section(cfg, p, cur) -> str:
@@ -1304,7 +1351,7 @@ def _beyond_section(cfg, p, cur) -> str:
     stories = cluster_stories(outside)
     stories.sort(key=lambda m: (len(m), max(i["date"] for i in m)), reverse=True)
     rows = []
-    for m in stories[:12]:
+    for m in stories[:16]:
         lead = max(m, key=lambda i: len(i["snippet"]))
         tags = "".join(f"<span class='tag s'>{html.escape(x)}</span>" for x in sorted({x for i in m for x in i["signals"]}))
         tags += "".join(f"<span class='tag k'>{html.escape(x)}</span>" for x in sorted({x for i in m for x in i["capabilities"]}))
@@ -1313,21 +1360,21 @@ def _beyond_section(cfg, p, cur) -> str:
         rows.append(f"<li><div class='t'>{_link(lead, _clean_title(lead['title']))}</div>"
                     f"<div class='meta'>{html.escape(max(i['date'] for i in m))} · {html.escape(lead['channel'])}{who} · "
                     f"{len(m)} source{'s' if len(m) > 1 else ''} {tags}</div></li>")
-    news_html = "".join(rows) or "<li class='mut'>Nothing outside the watchlist this period.</li>"
+    news_html = _more(rows, 6, "moves", "<li class='mut'>Nothing outside the watchlist this period.</li>")
 
     # --- tracked voices ----------------------------------------------------
     by_voice = defaultdict(list)
     for i in cur:
         for v in i.get("voices", []):
             by_voice[v].append(i)
-    vrows = "".join(
+    vrows = [
         f"<li><div class='vh'><span><b>{html.escape(v)}</b> <small>{html.escape(vmeta[v]['kind'])} · "
         f"{html.escape(vmeta[v].get('affiliation', ''))}</small></span><b>{len(its)}</b></div>"
         f"<div class='meta'>Latest: {_link(its[0], _clean_title(its[0]['title']))} · {html.escape(its[0]['date'])}</div></li>"
-        for v, its in sorted(by_voice.items(), key=lambda kv: -len(kv[1])))
+        for v, its in sorted(by_voice.items(), key=lambda kv: -len(kv[1]))]
     quiet = len(vmeta) - len(by_voice)
-    voices_html = (f"<ul class='moves'>{vrows or '<li class=mut>No tracked voices mentioned this period.</li>'}</ul>"
-                   f"<p class='mut' style='margin:6px 0 0'>{quiet} of {len(vmeta)} tracked voices not seen this period. "
+    voices_html = (_more(vrows, 4, "moves", "<li class='mut'>No tracked voices mentioned this period.</li>")
+                   + f"<p class='mut' style='margin:6px 0 0'>{quiet} of {len(vmeta)} tracked voices not seen this period. "
                    f"Edit the list under <code>[[voices]]</code> in config.toml.</p>")
 
     # --- academic & research ------------------------------------------------
@@ -1344,12 +1391,10 @@ def _beyond_section(cfg, p, cur) -> str:
                 f"<div class='meta'>{who}{html.escape(i['date'])} · {html.escape(i['url_type'] if i['source'] == 'arxiv' else i['channel'])} {cap}</div></li>")
     acad_html = ""
     if studies:
-        acad_html += "<h4>Studies in the news &amp; on LinkedIn</h4><ul class='moves'>" + "".join(arow(i) for i in studies[:8]) + "</ul>"
+        acad_html += "<h4>Studies in the news &amp; on LinkedIn</h4>" + _more([arow(i) for i in studies[:10]], 3, "moves")
     if papers:
-        acad_html += (f"<h4>New papers <small>· arXiv, {len(papers)} this period</small></h4><ul class='moves'>"
-                      + "".join(arow(i) for i in papers[:10]) + "</ul>")
-        if len(papers) > 10:
-            acad_html += f"<p class='mut'>+{len(papers) - 10} more in the item list below (filter: “paper”).</p>"
+        acad_html += (f"<h4>New papers <small>· arXiv, {len(papers)} this period</small></h4>"
+                      + _more([arow(i) for i in papers], 4, "moves"))
     acad_html = acad_html or "<p class='mut'>No academic items this period.</p>"
 
     # --- people to watch (not on the voices list) -----------------------------
@@ -1361,19 +1406,18 @@ def _beyond_section(cfg, p, cur) -> str:
             continue  # paper authors are listed with their papers
         if a.lower() not in known:
             people[a].append(i)
-    prow = "".join(
-        f"<li><span><b>{html.escape(n)}</b> <small>{html.escape(_clean_title(its[0]['title'])[:100])}</small></span><b>{len(its)}</b></li>"
-        for n, its in sorted(people.items(), key=lambda kv: -len(kv[1]))[:10])
-    people_html = prow or ("<li class='mut'>None detected. People are found when they author an indexed LinkedIn "
-                           "post or article, or are quoted as a professor / researcher.</li>")
+    prow = [f"<li><span><b>{html.escape(n)}</b> <small>{html.escape(_clean_title(its[0]['title'])[:100])}</small></span><b>{len(its)}</b></li>"
+            for n, its in sorted(people.items(), key=lambda kv: -len(kv[1]))[:20]]
+    people_html = _more(prow, 5, "lb", "<li class='mut'>None detected. People are found when they author an indexed LinkedIn "
+                                       "post or article, or are quoted as a professor / researcher.</li>")
 
     return f"""
 {_h2("beyond", "Beyond the watchlist", p)}
 <div class="panel"><h3>News from others <small>· items that name no tracked competitor, same story merged</small></h3>
-<ul class="moves">{news_html}</ul></div>
+{news_html}</div>
 <div class="cols" style="margin-top:12px">
  <div class="panel"><h3>Industry voices</h3>{voices_html}
-  <h4>People to watch <small>· speaking about synthetic, not on your voices list</small></h4><ul class="lb">{people_html}</ul></div>
+  <h4>People to watch <small>· speaking about synthetic, not on your voices list</small></h4>{people_html}</div>
  <div class="panel"><h3>Academic &amp; research</h3>{acad_html}</div>
 </div>"""
 
@@ -1395,7 +1439,7 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
     market_caps = Counter(c for it in items for c in it["capabilities"])
 
     def row(it):
-        return (f"<tr><td class='d'>{html.escape(it['date'])}</td>"
+        return (f"<tr><td class='d'>{_dlabel(it)}</td>"
                 f"<td class='d'><span class='ch ch-{html.escape(it['channel'])}'>{html.escape(it['channel'])}</span><br><small>{html.escape(it['url_type'])}</small></td>"
                 f"<td><div class='t'>{_link(it, it['title'])}</div><div class='sn'>{html.escape(it['snippet'][:320])}</div>"
                 f"<div>{_tags(it)}{_att_badges(it['att']) if 'att' in it else ''}</div></td></tr>")
@@ -1404,10 +1448,9 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
         f"<article class='brief'><h3>{html.escape(c)} <small>{html.escape(seg.get(c, ''))} · "
         f"{html.escape(b['created'][:10])}</small></h3><pre>{html.escape(b['body'])}</pre></article>"
         for c, b in sorted(briefs.items(), key=lambda kv: -comp_count.get(kv[0], 0)) if not c.startswith("_"))
-    lb = "".join(
-        f"<li><span>{html.escape(c)} <small>{html.escape(seg.get(c, ''))}</small></span><b>{n}</b></li>"
-        for c, n in comp_count.most_common(12))
-    caps = "".join(f"<li><span>{html.escape(c)}</span><b>{n}</b></li>" for c, n in market_caps.most_common())
+    lb = _more([f"<li><span>{html.escape(c)} <small>{html.escape(seg.get(c, ''))}</small></span><b>{n}</b></li>"
+                for c, n in comp_count.most_common()], 7, "lb")
+    caps = _more([f"<li><span>{html.escape(c)}</span><b>{n}</b></li>" for c, n in market_caps.most_common()], 7, "lb")
     hidden = "" if p == cfg["settings"]["default_period"] else " hidden"
 
     return f"""<section class="period" data-period="{p}"{hidden}>
@@ -1423,8 +1466,8 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
  <div class="kpi"><b>{len(comps)}</b>competitors active</div>
 </div>
 <div class="cols">
- <div class="panel"><h3>Share of voice</h3><ul class="lb">{lb or "<li>No data yet</li>"}</ul></div>
- <div class="panel"><h3>Capabilities discussed (market-wide)</h3><ul class="lb">{caps or "<li>No data yet</li>"}</ul></div>
+ <div class="panel"><h3>Share of voice</h3>{lb or "<ul class='lb'><li>No data yet</li></ul>"}</div>
+ <div class="panel"><h3>Capabilities discussed (market-wide)</h3>{caps or "<ul class='lb'><li>No data yet</li></ul>"}</div>
 </div>
 <h3 class="sub">Competitor × signal type</h3>{_heat(sig_m, comps, sig_cols, "Competitor")}
 <h3 class="sub">Competitor × capability</h3>{_heat(cap_m, comps, cap_cols, "Competitor")}
@@ -1681,7 +1724,15 @@ h3{{font:600 15px/1.3 var(--f-body);margin:0 0 10px}}
 h3.sub{{font-size:14px;margin:26px 0 10px;color:var(--fg)}}
 h4{{font:500 11px var(--f-mono);margin:18px 0 8px;color:var(--mut);text-transform:uppercase;letter-spacing:.08em}}
 .panel,.kpi,.brief{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;min-width:0}}
-.cols{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:14px;align-items:start}}
+.cols{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:14px;align-items:stretch}}
+.cols-wide{{grid-template-columns:minmax(0,1.7fr) minmax(0,1fr)}}
+@media (max-width:820px){{.cols-wide{{grid-template-columns:minmax(0,1fr)}}}}
+.foot-out{{border-top:0;padding-top:0;margin-top:8px}}
+details.more{{margin-top:2px}}
+details.more>summary{{list-style:none;cursor:pointer;display:inline-block;font:500 12.5px var(--f-body);color:var(--acc);
+padding:6px 0 2px}}details.more>summary::-webkit-details-marker{{display:none}}
+details.more>summary::before{{content:"+ "}}details.more[open]>summary::before{{content:"− "}}
+details.more[open]>summary{{margin-bottom:4px}}
 .cols>*{{min-width:0}}
 .note{{margin:0 0 10px;font-size:13px;color:var(--mut)}}
 .foot{{margin:12px 0 0;padding-top:10px;border-top:1px dashed var(--line);font-size:12.5px;color:var(--mut)}}
@@ -1760,7 +1811,7 @@ ul.ql{{font-size:13px;margin:4px 0 0}}details{{margin-top:10px}}summary{{cursor:
 </style></head><body><main>
 <header class="mast">
  <span class="kicker">Competitive intel · synthetic research</span>
- <h1>LinkedIn scraper: synthetic offerings in market research</h1>
+ <h1>LinkedIn Scraper: Synthetic Offerings in Market Research</h1>
  <div class="stamp"><span>Generated {stamp} UTC</span><span>Sources: {sources}</span><span>{len(all_items)} items collected</span></div>
 </header>
 {setup}
