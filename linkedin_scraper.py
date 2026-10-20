@@ -1142,8 +1142,8 @@ def emerging_names(items: list[dict], cfg: dict, limit: int = 10) -> list[tuple[
     verbs = (r"(?i:launch(?:es)?|unveils?|announces?|introduces?|debuts?|raises?|secures?|acquires?|"
              r"partners?|teams up|rolls out|releases?|expands?|closes|bags|lands)")
     pat = re.compile(r"\b([A-Z][\w&.\-]*(?:\s+(?:[A-Z][\w&.\-]*|and|&)){0,4}?)\s+" + verbs + r"\b")
-    found: dict[str, list[str]] = defaultdict(list)
-    for it in items:
+    found: dict[str, list[dict]] = defaultdict(list)
+    for it in sorted(items, key=lambda i: i["date"], reverse=True):   # newest first, so [0] is the latest
         title = _clean_title(it["title"])
         for m in pat.finditer(title):
             for part in re.split(r"\s+(?:and|&)\s+", m.group(1)):
@@ -1153,10 +1153,10 @@ def emerging_names(items: list[dict], cfg: dict, limit: int = 10) -> list[tuple[
                 name = " ".join(words)
                 if len(name) < 3 or name.lower() in known or any(k in name.lower() for k in known):
                     continue
-                if title not in found[name]:
-                    found[name].append(title)
+                if all(_clean_title(x["title"]) != title for x in found[name]):
+                    found[name].append(it)
     ranked = sorted(found.items(), key=lambda kv: -len(kv[1]))[:limit]
-    return [(n, len(t), t[0]) for n, t in ranked]
+    return [(n, len(t), t[0]) for n, t in ranked]   # (name, item count, latest item)
 
 
 def _pct(cur: int, prev: int) -> str:
@@ -1382,8 +1382,8 @@ def _trends_section(cfg, p, cur, prev, briefs, earliest, seg, first_run) -> str:
 
     # --- Names not on the watchlist ----------------------------------------
     emerging = emerging_names(cur, cfg)
-    em_html = _more([f"<li><span><b>{html.escape(n)}</b> <small>{html.escape(ex[:110])}</small></span><b>{k}</b></li>"
-                     for n, k, ex in emerging], 5, "lb", "<li class='mut'>None detected.</li>")
+    em_html = _more([f"<li><span><b>{html.escape(n)}</b> <small class='hl'>{_link(it, _clean_title(it['title'])[:110])} · {_dlabel(it)}</small></span><b>{k}</b></li>"
+                     for n, k, it in emerging], 5, "lb", "<li class='mut'>None detected.</li>")
 
     return f"""
 {_h2("summary", "Summary &amp; recent trends", p)}
@@ -1393,7 +1393,7 @@ def _trends_section(cfg, p, cur, prev, briefs, earliest, seg, first_run) -> str:
 </div>
 {'<div class="panel" style="margin-top:12px"><h3>Key moves</h3>' + moves_html + '</div>' if ai_html else ''}
 <h3 class="sub">Momentum vs prior {p} days</h3>{mom_html}
-<div class="panel" style="margin-top:12px"><div class="rank-head"><h3>Organizations not on the watchlist <small>· launching, raising or partnering in this period's coverage; grey text is an example headline</small></h3><span class="lbl">Items</span></div>
+<div class="panel" style="margin-top:12px"><div class="rank-head"><h3>Organizations not on the watchlist <small>· launching, raising or partnering in this period's coverage, with their latest headline</small></h3><span class="lbl">Items</span></div>
 {em_html}</div>"""
 
 
@@ -1462,7 +1462,7 @@ def _beyond_section(cfg, p, cur) -> str:
             continue  # paper authors are listed with their papers
         if a.lower() not in known:
             people[a].append(i)
-    prow = [f"<li><span><b>{html.escape(n)}</b> <small>{html.escape(_clean_title(its[0]['title'])[:100])}</small></span><b>{len(its)}</b></li>"
+    prow = [f"<li><span><b>{html.escape(n)}</b> <small class='hl'>{_link(its[0], _clean_title(its[0]['title'])[:100])} · {_dlabel(its[0])}</small></span><b>{len(its)}</b></li>"
             for n, its in sorted(people.items(), key=lambda kv: -len(kv[1]))[:20]]
     people_html = _more(prow, 5, "lb", "<li class='mut'>None detected. People are found when they author an indexed LinkedIn "
                                        "post or article, or are quoted as a professor / researcher.</li>")
@@ -1473,7 +1473,7 @@ def _beyond_section(cfg, p, cur) -> str:
 {news_html}</div>
 <div class="cols" style="margin-top:12px">
  <div class="panel"><h3>Industry voices</h3>{voices_html}
-  <div class="rank-head"><h4>People to watch <small>· speaking about synthetic, not on the voices list</small></h4><span class="lbl">Items</span></div>{people_html}</div>
+  <div class="rank-head"><h4>People to watch <small>· speaking about synthetic, not on the voices list, with their latest post</small></h4><span class="lbl">Items</span></div>{people_html}</div>
  <div class="panel"><h3>Academic &amp; research</h3>{acad_html}</div>
 </div>"""
 
@@ -1797,7 +1797,7 @@ h4{{font:500 11px var(--f-mono);margin:18px 0 8px;color:var(--mut);text-transfor
 .quiet{{font-size:13px;color:var(--mut);margin:12px 0 0;padding-top:10px;border-top:1px solid var(--soft)}}.quiet .lbl{{display:block;margin-bottom:4px}}
 tr.self th,tr.self td.num,li.self{{color:var(--acc)}}tr.self th::after,li.self span::after{{content:" ◆";font-size:10px}}
 .rank-head{{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:10px}}
-.rank-head h3,.rank-head h4{{margin:0}}.rank-head h4{{margin-top:18px}}.rank-head .lbl{{flex:0 0 72px;text-align:right;white-space:nowrap}}
+.rank-head h3,.rank-head h4{{margin:0}}small.hl a{{color:var(--mut);text-decoration:underline;text-decoration-color:var(--line)}}small.hl a:hover{{color:var(--acc)}}.rank-head h4{{margin-top:18px}}.rank-head .lbl{{flex:0 0 72px;text-align:right;white-space:nowrap}}
 .cols-wide{{grid-template-columns:minmax(0,1.7fr) minmax(0,1fr)}}
 @media (max-width:820px){{.cols-wide{{grid-template-columns:minmax(0,1fr)}}}}
 .foot-out{{border-top:0;padding-top:0;margin-top:8px}}
