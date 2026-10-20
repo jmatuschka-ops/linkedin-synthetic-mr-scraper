@@ -36,14 +36,23 @@ button:disabled{opacity:.6;cursor:default}
 .list li span{font:13px var(--f-mono);overflow-wrap:anywhere;min-width:0}
 .list button{padding:4px 10px;font-size:13px}
 h2{font:600 18px var(--f-display);margin:28px 0 4px}
+.cta{text-align:center;margin:8px 0 32px;padding:24px 16px;background:var(--card);border:1px solid var(--line);border-radius:12px}
+.cta-btn{display:inline-block;font:600 18px var(--f-body);padding:14px 28px;border-radius:10px;background:var(--acc);color:var(--acc-fg);text-decoration:none}
+.cta-btn:hover{filter:brightness(1.08)}.cta .hint{margin:12px auto 0;max-width:44ch}
 .what{margin:0 0 24px}.what h2{margin:0 0 8px;font-size:16px}
 .what ul{margin:0;padding-left:18px;display:grid;gap:6px}.what li::marker{color:var(--acc)}
 .what .hint{margin-top:10px}
+.sub-h{margin:0 0 10px;font-size:16px}
 </style>
 <main>
  <span class="kicker">Competitive intel · synthetic research</span>
  <h1>Get the synthetic MR intel email</h1>
  <p class="lede">Each week this tool scans public LinkedIn posts and articles, industry news and new academic papers for activity in synthetic respondents, synthetic data, digital twins and AI personas. It tracks about 20 market research competitors and 15 industry and academic voices. Every Monday morning you get the highlights by email.</p>
+
+ <div class="cta">
+  <a class="cta-btn" href="https://claude.ai/artifact/52dwftZ1hBaynPM3grou6C" target="_blank" rel="noopener">Open the full report →</a>
+  <p class="hint">Updated every Monday. Views from the last week to 90 days, competitor momentum, and every item found.</p>
+ </div>
 
  <div class="what">
   <h2>What's in each email</h2>
@@ -57,6 +66,7 @@ h2{font:600 18px var(--f-display);margin:28px 0 4px}
   <p class="hint">Built from public sources only. Items are tagged automatically, so check the original before citing anything.</p>
  </div>
 
+ <h2 class="sub-h">Get the highlights by email</h2>
  <div class="card">
   <p data-state="loading">Connecting…</p>
   <p data-state="off" hidden>Sign-up isn't available in this view. Open this page on claude.ai while signed in, then reload.</p>
@@ -85,7 +95,6 @@ h2{font:600 18px var(--f-display);margin:28px 0 4px}
   <ul class="list" id="list"></ul>
  </section>
 
- <p class="back"><a href="https://claude.ai/artifact/52dwftZ1hBaynPM3grou6C" target="_blank" rel="noopener">Open the full report →</a></p>
 </main>
 <script>
 (function(){
