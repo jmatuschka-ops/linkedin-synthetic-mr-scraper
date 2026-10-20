@@ -1496,7 +1496,10 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
 
     def row(it):
         hay = " ".join(it["competitors"] + it["signals"] + it["capabilities"] + it.get("voices", []))
-        return (f"<tr data-ch='{html.escape(it['channel'])}' data-tags='{html.escape(hay)}'><td class='d'>{_dlabel(it)}</td>"
+        posted = html.escape(it["date"]) if it.get("dated", True) else "—"
+        dates = (f"<span class='dl'>Posted</span> {posted}<br>"
+                 f"<span class='dl'>Found</span> {html.escape(it['first_seen'][:10])}")
+        return (f"<tr data-ch='{html.escape(it['channel'])}' data-tags='{html.escape(hay)}'><td class='d'>{dates}</td>"
                 f"<td class='d'><span class='ch ch-{html.escape(it['channel'])}'>{html.escape(it['channel'])}</span><br><small>{html.escape(it['url_type'])}</small></td>"
                 f"<td><div class='t'>{_link(it, it['title'])}</div><div class='sn'>{html.escape(it['snippet'][:320])}</div>"
                 f"<div>{_tags(it)}{_att_badges(it['att']) if 'att' in it else ''}</div></td></tr>")
@@ -1848,7 +1851,8 @@ border:1px solid var(--soft);min-width:58px}}
 .heat .rh,.mom .rh{{color:var(--fg);white-space:nowrap;font-weight:500}}
 .mom tbody tr+tr{{border-top:1px solid var(--soft)}}.mom td.num{{font:13px var(--f-mono);white-space:nowrap}}
 .feed tr+tr{{border-top:1px solid var(--soft)}}.feed tr:hover{{background:color-mix(in srgb,var(--soft) 55%,transparent)}}
-.feed .d{{white-space:nowrap;font:12px var(--f-mono);color:var(--mut);width:1%}}
+.feed .d{{white-space:nowrap;font:12px/1.7 var(--f-mono);color:var(--mut);width:1%}}
+.feed .d .dl{{display:inline-block;width:48px;font:500 10px var(--f-mono);letter-spacing:.06em;text-transform:uppercase}}
 .ch{{display:inline-block;font:500 11px var(--f-mono);text-transform:uppercase;letter-spacing:.04em;color:var(--acc)}}
 .ch-academic{{color:var(--a2-fg)}}.ch-linkedin{{color:var(--c-fg)}}
 .sn{{color:var(--mut);font-size:13px;margin:4px 0 6px;max-width:90ch}}
