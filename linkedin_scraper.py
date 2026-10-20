@@ -1393,7 +1393,7 @@ def _trends_section(cfg, p, cur, prev, briefs, earliest, seg, first_run) -> str:
 </div>
 {'<div class="panel" style="margin-top:12px"><h3>Key moves</h3>' + moves_html + '</div>' if ai_html else ''}
 <h3 class="sub">Momentum vs prior {p} days</h3>{mom_html}
-<div class="panel" style="margin-top:12px"><h3>Organizations not on the watchlist <small>· launching, raising or partnering in this period's coverage</small></h3>
+<div class="panel" style="margin-top:12px"><div class="rank-head"><h3>Organizations not on the watchlist <small>· launching, raising or partnering in this period's coverage; grey text is an example headline</small></h3><span class="lbl">Items</span></div>
 {em_html}</div>"""
 
 
@@ -1473,7 +1473,7 @@ def _beyond_section(cfg, p, cur) -> str:
 {news_html}</div>
 <div class="cols" style="margin-top:12px">
  <div class="panel"><h3>Industry voices</h3>{voices_html}
-  <h4>People to watch <small>· speaking about synthetic, not on the voices list</small></h4>{people_html}</div>
+  <div class="rank-head"><h4>People to watch <small>· speaking about synthetic, not on the voices list</small></h4><span class="lbl">Items</span></div>{people_html}</div>
  <div class="panel"><h3>Academic &amp; research</h3>{acad_html}</div>
 </div>"""
 
@@ -1797,7 +1797,7 @@ h4{{font:500 11px var(--f-mono);margin:18px 0 8px;color:var(--mut);text-transfor
 .quiet{{font-size:13px;color:var(--mut);margin:12px 0 0;padding-top:10px;border-top:1px solid var(--soft)}}.quiet .lbl{{display:block;margin-bottom:4px}}
 tr.self th,tr.self td.num,li.self{{color:var(--acc)}}tr.self th::after,li.self span::after{{content:" ◆";font-size:10px}}
 .rank-head{{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:10px}}
-.rank-head h3{{margin:0}}.rank-head .lbl{{flex:0 0 72px;text-align:right;white-space:nowrap}}
+.rank-head h3,.rank-head h4{{margin:0}}.rank-head h4{{margin-top:18px}}.rank-head .lbl{{flex:0 0 72px;text-align:right;white-space:nowrap}}
 .cols-wide{{grid-template-columns:minmax(0,1.7fr) minmax(0,1fr)}}
 @media (max-width:820px){{.cols-wide{{grid-template-columns:minmax(0,1fr)}}}}
 .foot-out{{border-top:0;padding-top:0;margin-top:8px}}
