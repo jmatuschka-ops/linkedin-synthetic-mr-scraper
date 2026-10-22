@@ -17,15 +17,23 @@ lookback_days = 180
 # Period switcher in the report (days) and which one opens by default.
 report_periods = [7, 14, 30, 60, 90]
 default_period = 30
+# Which sources a run uses. LinkedIn comes from tavily (or brave/serpapi if keyed); news and arxiv
+# add industry and academic context. For a LinkedIn-only report: sources = ["tavily", "inbox"]
+sources = ["news", "tavily", "brave", "serpapi", "arxiv", "inbox"]
 
-# Tavily LinkedIn search (free tier: 1,000 searches/month; a weekly run uses ~60-90)
+# Tavily LinkedIn search (free tier: 1,000 credits/month; a weekly run uses up to credits_per_run)
 [tavily]
-search_depth = "basic"          # "advanced" costs 2 credits per search
+# Tavily only ever searches linkedin.com. News (Google News) and papers (arXiv) are separate free sources.
+search_depth = "advanced"       # main searches: finds more posts and returns fuller text; 2 credits each
+variant_depth = "basic"         # extra phrasings for searches that fill the 20-result limit; 1 credit each
 max_results = 20
 include_domains = ["linkedin.com"]
+# Free tier: 1,000 credits/month. The script stops before either cap; main searches go first.
+credits_per_run = 190
+credits_per_month = 950
 # A search that returns the full 20 results is re-run with each of these appended, to reach
 # posts beyond the first 20 (Tavily has no next page). Each costs one search.
-capped_variants = ["launch announcement", "study results accuracy"]
+capped_variants = ["launch announcement", "study results accuracy"]   # used in order while credits allow
 
 # Search terms that define the "synthetic" space.
 [topics]
@@ -201,20 +209,23 @@ extra_recipients = []
 [[voices]]
 name = "Joon Sung Park"
 aliases = ["Joon Sung Park", "Joon Park"]
-affiliation = "Stanford / Simile"
+affiliation = "Simile co-founder & CEO · Stanford"
 kind = "academic"
+company = "Simile"
 
 [[voices]]
 name = "Michael Bernstein"
 aliases = ["Michael Bernstein"]
-affiliation = "Stanford"
+affiliation = "Simile co-founder · Stanford"
 kind = "academic"
+company = "Simile"
 
 [[voices]]
 name = "Percy Liang"
 aliases = ["Percy Liang"]
-affiliation = "Stanford"
+affiliation = "Simile co-founder · Stanford"
 kind = "academic"
+company = "Simile"
 
 [[voices]]
 name = "Lisa Argyle"
@@ -281,12 +292,267 @@ name = "Peter Weinberg"
 aliases = ["Peter Weinberg"]
 affiliation = "Evidenza co-founder"
 kind = "industry"
+company = "Evidenza"
 
 [[voices]]
 name = "Jon Lombardo"
 aliases = ["Jon Lombardo"]
 affiliation = "Evidenza co-founder"
 kind = "industry"
+company = "Evidenza"
+
+
+# ---- Competitor founders & executives ---------------------------------------
+# Found Oct 2026 from each company's own site, press releases or coverage (source noted).
+# Their posts count toward their company when they're about synthetic research or name the company.
+# Leadership changes: edit here.
+
+# Aaru: aaru.com/about; CNBC Squawk Box
+[[voices]]
+name = "Cameron Fink"
+aliases = ["Cameron Fink"]
+affiliation = "Aaru co-founder & CEO"
+kind = "executive"
+company = "Aaru"
+
+[[voices]]
+name = "Ned Koh"
+aliases = ["Ned Koh"]
+affiliation = "Aaru co-founder & president"
+kind = "executive"
+company = "Aaru"
+
+[[voices]]
+name = "John Kessler"
+aliases = ["John Kessler"]
+affiliation = "Aaru co-founder & CTO"
+kind = "executive"
+company = "Aaru"
+
+
+# Evidenza: evidenza.ai
+[[voices]]
+name = "Brian Watroba"
+aliases = ["Brian Watroba"]
+affiliation = "Evidenza co-founder"
+kind = "executive"
+company = "Evidenza"
+
+
+# Electric Twin: electrictwin.com
+[[voices]]
+name = "Alex Cooper"
+aliases = ["Alex Cooper"]
+affiliation = "Electric Twin co-founder & CEO"
+kind = "executive"
+company = "Electric Twin"
+
+[[voices]]
+name = "Ben Warner"
+aliases = ["Ben Warner"]
+affiliation = "Electric Twin co-founder & chief data scientist"
+kind = "executive"
+company = "Electric Twin"
+
+
+# Synthetic Users: NN/g; That Business of Meaning
+[[voices]]
+name = "Hugo Alves"
+aliases = ["Hugo Alves"]
+affiliation = "Synthetic Users co-founder & CPO"
+kind = "executive"
+company = "Synthetic Users"
+
+
+# Artificial Societies: societies.ai; SiliconANGLE
+[[voices]]
+name = "James He"
+aliases = ["James He"]
+affiliation = "Artificial Societies co-founder & CEO"
+kind = "executive"
+company = "Artificial Societies"
+
+[[voices]]
+name = "Patrick Sharpe"
+aliases = ["Patrick Sharpe"]
+affiliation = "Artificial Societies co-founder & CPO"
+kind = "executive"
+company = "Artificial Societies"
+
+[[voices]]
+name = "Tom Whittle"
+aliases = ["Tom Whittle"]
+affiliation = "Artificial Societies co-founder & CTO"
+kind = "executive"
+company = "Artificial Societies"
+
+
+# Fairgen: fairgen.ai/about; TechCrunch
+[[voices]]
+name = "Samuel Cohen"
+aliases = ["Samuel Cohen"]
+affiliation = "Fairgen co-founder & CEO"
+kind = "executive"
+company = "Fairgen"
+
+[[voices]]
+name = "Michael Cohen"
+aliases = ["Michael Cohen"]
+affiliation = "Fairgen co-founder"
+kind = "executive"
+company = "Fairgen"
+
+
+# Brox AI: VentureBeat
+[[voices]]
+name = "Hamish Brocklebank"
+aliases = ["Hamish Brocklebank"]
+affiliation = "Brox AI CEO"
+kind = "executive"
+company = "Brox AI"
+
+
+# Native.ai: gonative.ai/company; BusinessWire
+[[voices]]
+name = "Frank Pica"
+aliases = ["Frank Pica"]
+affiliation = "Native.ai co-founder & CEO"
+kind = "executive"
+company = "Native.ai"
+
+[[voices]]
+name = "Sarah Sanders"
+aliases = ["Sarah Sanders"]
+affiliation = "Native.ai co-founder"
+kind = "executive"
+company = "Native.ai"
+
+
+# Yabble: yabble.com; Greenbook
+[[voices]]
+name = "Kathryn Topp"
+aliases = ["Kathryn Topp"]
+affiliation = "Yabble founder & CEO"
+kind = "executive"
+company = "Yabble"
+
+[[voices]]
+name = "Rachel O'Shea"
+aliases = ["Rachel O'Shea"]
+affiliation = "Yabble co-founder & COO"
+kind = "executive"
+company = "Yabble"
+
+
+# Ipsos: Investing.com
+[[voices]]
+name = "Jean-Laurent Poitou"
+aliases = ["Jean-Laurent Poitou", "Jean Laurent Poitou"]
+affiliation = "Ipsos CEO"
+kind = "executive"
+company = "Ipsos"
+
+
+# Kantar: kantar.com press release
+[[voices]]
+name = "Paul Zwillenberg"
+aliases = ["Paul Zwillenberg"]
+affiliation = "Kantar CEO"
+kind = "executive"
+company = "Kantar"
+
+
+# NielsenIQ: nielseniq.com
+[[voices]]
+name = "Jim Peck"
+aliases = ["Jim Peck"]
+affiliation = "NielsenIQ CEO"
+kind = "executive"
+company = "NielsenIQ"
+
+
+# Toluna: Business Wire; tolunacorporate.com
+[[voices]]
+name = "Amy Fenton"
+aliases = ["Amy Fenton"]
+affiliation = "Toluna CEO"
+kind = "executive"
+company = "Toluna"
+
+[[voices]]
+name = "Frédéric-Charles Petit"
+aliases = ["Frédéric-Charles Petit", "Frederic-Charles Petit", "Frédéric Charles Petit"]
+affiliation = "Toluna founder"
+kind = "executive"
+company = "Toluna"
+
+
+# Dynata: CB Insights
+[[voices]]
+name = "Michael Petrullo"
+aliases = ["Michael Petrullo"]
+affiliation = "Dynata CEO"
+kind = "executive"
+company = "Dynata"
+
+
+# Cint: cint.com/about; Axios
+[[voices]]
+name = "Patrick Comer"
+aliases = ["Patrick Comer"]
+affiliation = "Cint CEO"
+kind = "executive"
+company = "Cint"
+
+
+# Zappi: Research News Online; zappi.io
+[[voices]]
+name = "Aaron Kechley"
+aliases = ["Aaron Kechley"]
+affiliation = "Zappi CEO"
+kind = "executive"
+company = "Zappi"
+
+[[voices]]
+name = "Steve Phillips"
+aliases = ["Steve Phillips"]
+affiliation = "Zappi founder & chief innovation officer"
+kind = "executive"
+company = "Zappi"
+
+
+# quantilope: quantilope.com press pack
+[[voices]]
+name = "Peter Aschmoneit"
+aliases = ["Peter Aschmoneit"]
+affiliation = "quantilope co-founder & CEO"
+kind = "executive"
+company = "quantilope"
+
+[[voices]]
+name = "Lucas Bremer"
+aliases = ["Lucas Bremer"]
+affiliation = "quantilope co-founder & CPO"
+kind = "executive"
+company = "quantilope"
+
+
+# Medallia: medallia.com/leadership
+[[voices]]
+name = "Mark Bishof"
+aliases = ["Mark Bishof"]
+affiliation = "Medallia CEO"
+kind = "executive"
+company = "Medallia"
+
+
+# SurveyMonkey: surveymonkey.com/about/leadership
+[[voices]]
+name = "Eric Johnson"
+aliases = ["Eric Johnson"]
+affiliation = "SurveyMonkey CEO"
+kind = "executive"
+company = "SurveyMonkey"
 
 # Academic coverage: papers from arXiv (official API) plus news/LinkedIn about
 # studies. An item counts as academic if its text or URL contains one of `terms`.

@@ -113,6 +113,9 @@ def open_db(path: Path) -> sqlite3.Connection:
             reactions INTEGER, comments INTEGER, reposts INTEGER
         );
         CREATE INDEX IF NOT EXISTS obs_item ON observations(item_id);
+        CREATE TABLE IF NOT EXISTS usage (
+            run TEXT, source TEXT, credits INTEGER, note TEXT
+        );
         CREATE TABLE IF NOT EXISTS query_stats (
             run TEXT, source TEXT, query TEXT, results INTEGER, kept INTEGER,
             capped INTEGER, error TEXT
@@ -450,7 +453,9 @@ def tavily_queries(cfg: dict) -> list[str]:
     # Tavily is a relevance-ranked search (OR/site: operators aren't needed; the domain is
     # filtered with include_domains). One query per competitor, product name, topic and voice
     # keeps a weekly run around 60-90 searches, inside the free 1,000 a month.
-    qs = [f'"{c["name"]}" synthetic respondents digital twins AI personas' for c in cfg["competitors"]]
+    # Short company searches stay about the company; a long tail of topic words pulled every
+    # company search toward the same general synthetic-research posts.
+    qs = [f'"{c["name"]}" synthetic' for c in cfg["competitors"]]
     names = {c["name"].lower() for c in cfg["competitors"]}
     for c in cfg["competitors"]:
         for a in c["aliases"]:
@@ -460,26 +465,44 @@ def tavily_queries(cfg: dict) -> list[str]:
                     and squash(c["name"]) not in squash(a) and squash(a) not in squash(c["name"])):
                 qs.append(f'"{a}" {c["name"]} synthetic')
     qs += [f'"{t}" market research' for t in cfg["topics"]["specific"] + cfg["topics"]["generic"]]
-    qs += [f'"{v["name"]}" synthetic research' for v in cfg["voices"]]
-    return list(dict.fromkeys(qs))
+    # Academics rarely post on LinkedIn; they're covered by the academic sources instead.
+    qs += [f'"{v["name"]}" synthetic research' for v in cfg["voices"] if not v.get("company") and v.get("kind") != "academic"]
+    # One search per company for its founders and executives (names together), rather than one
+    # per person, to save credits.
+    by_company = defaultdict(list)
+    for v in cfg["voices"]:
+        if v.get("company"):
+            by_company[v["company"]].append(v["name"])
+    qs += [f'{c} {" ".join(names)} synthetic research' for c, names in by_company.items()]
+    seen, out = set(), []
+    for q in qs:   # drop exact repeats regardless of case or spacing
+        k = " ".join(q.lower().split())
+        if k not in seen:
+            seen.add(k)
+            out.append(q)
+    return out
 
 
 def _tavily_search(q: str, base: dict, key: str, delay: float) -> tuple[list, str]:
     """One search, retried once when it comes back empty or fails (Tavily occasionally returns
     nothing for a query that has results moments later)."""
-    err = ""
+    err, calls = "", 0
     for attempt in range(2):
+        calls += 1
         try:
             data = http_post_json("https://api.tavily.com/search", {"query": q, **base},
-                                  {"Authorization": f"Bearer {key}"}, timeout=40)
+                                  {"Authorization": f"Bearer {key}"}, timeout=60)
             results = data.get("results", [])
             if results:
-                return results, ""
+                return results, "", calls
             err = ""
         except Exception as e:
             err = str(e)[:200]
         time.sleep(delay * 2)
-    return [], err
+    return [], err, calls
+
+
+TAVILY_COST = {"basic": 1, "advanced": 2}
 
 
 def collect_tavily(cfg: dict, days: int, stats: list):
@@ -489,15 +512,32 @@ def collect_tavily(cfg: dict, days: int, stats: list):
         return
     t = cfg.get("tavily", {})
     delay = cfg["settings"]["request_delay_seconds"]
-    base = {"search_depth": t.get("search_depth", "basic"), "max_results": min(int(t.get("max_results", 20)), 20),
+    base = {"max_results": min(int(t.get("max_results", 20)), 20),
             "include_domains": t.get("include_domains", ["linkedin.com"]), "include_raw_content": False}
+    main_depth, var_depth = t.get("search_depth", "basic"), t.get("variant_depth", "basic")
+    # Credit budget: stop before the per-run or monthly cap. Main searches run first, then the
+    # extra phrasings for searches that filled the result limit.
+    budget = min(int(t.get("credits_per_run", 190)),
+                 int(t.get("credits_per_month", 950)) - int(cfg.get("_tavily_month_spent", 0)))
+    spent, skipped = 0, 0
     # No date filter: Tavily rarely knows when a LinkedIn page was published, so date filters
     # silently drop most LinkedIn results. Posts are dated from their URL instead (linkedin_date).
     variants = t.get("capped_variants", [])
-    queue = [(q, q) for q in tavily_queries(cfg)]
-    while queue:
-        q, parent = queue.pop(0)
-        results, err = _tavily_search(q, base, key, delay)
+    known = cfg.get("_known_ids", set())
+    resting = cfg.get("_resting_queries", set())
+    week = int(datetime.now(timezone.utc).strftime("%V"))
+    # A search that found nothing new in each of its last two runs runs every other week.
+    queue = [(q, q, main_depth) for q in tavily_queries(cfg) if q not in resting or week % 2 == 0]
+    rested = sum(1 for q in tavily_queries(cfg) if q in resting and week % 2)
+    extra: list[tuple[str, str, str]] = []
+    while queue or extra:
+        q, parent, depth = queue.pop(0) if queue else extra.pop(0)
+        cost = TAVILY_COST.get(depth, 1)
+        if spent + 2 * cost > budget:   # worst case: the search plus one retry
+            skipped += 1
+            continue
+        results, err, calls = _tavily_search(q, {**base, "search_depth": depth}, key, delay)
+        spent += calls * cost
         if err:
             print(f"  ! tavily query failed ({err}): {q}", file=sys.stderr)
         for rank, r in enumerate(results, 1):
@@ -513,10 +553,16 @@ def collect_tavily(cfg: dict, days: int, stats: list):
             }
         capped = len(results) >= base["max_results"]
         stats.append({"source": "tavily", "query": q, "results": len(results), "capped": capped, "error": err})
-        # Tavily has no next page: a query that fills the limit is widened with variant phrasings.
-        if capped and q == parent:
-            queue[0:0] = [(f"{q} {v}", parent) for v in variants]
+        # Tavily has no next page: a query that fills the limit is widened with variant phrasings,
+        # but only when most of its results were new to us (a sign there's more beyond the 20).
+        fresh = sum(1 for r in results if item_id(r.get("url", ""), r.get("title", "")) not in known)
+        if capped and q == parent and fresh >= len(results) / 2:
+            extra += [(f"{q} {v}", parent, var_depth) for v in variants]
         time.sleep(delay)
+    cfg["_tavily_spent"] = spent
+    print(f"  tavily: {spent} credits used this run (cap {budget})"
+          + (f", {skipped} searches skipped to stay within budget" if skipped else "")
+          + (f", {rested} low-yield searches resting this week" if rested else ""))
 
 
 ATOM = {"a": "http://www.w3.org/2005/Atom"}
@@ -624,7 +670,21 @@ def classify(item: dict, cfg: dict) -> dict:
     if "Leadership change" in sigs and "Product launch" in sigs and not re.search(r"launch|unveil|introduc", low):
         sigs.remove("Product launch")
     caps = [k for k, kws in cfg["capabilities"].items() if any(kw in low for kw in kws)]
-    voices = [v["name"] for v in cfg["voices"] if any(p.search(text) for p in v["_patterns"])]
+    voices = []
+    for v in cfg["voices"]:
+        if not any(p.search(text) for p in v["_patterns"]):
+            continue
+        comp = v.get("company")
+        if comp:
+            # Executive names collide with other people ("Alex Cooper", "Eric Johnson"), so a match
+            # needs their company named or the synthetic topic present. Their posts then count
+            # toward the company even when it isn't named.
+            named = comp in comps or any(p.search(text) for c in cfg["competitors"] if c["name"] == comp for p in c["_patterns"])
+            if not (named or _SYNTH_TOPIC.search(text)):
+                continue
+            if comp not in comps and any(c["name"] == comp for c in cfg["competitors"]):
+                comps.append(comp)
+        voices.append(v["name"])
     channel, kind = url_type(item["url"])
     if item["source"] == "inbox":
         channel = "linkedin" if "linkedin.com" in item["url"] else "manual"
@@ -749,6 +809,23 @@ def cmd_collect(cfg: dict, db: sqlite3.Connection, sources: list[str], days: int
     fetched = new = 0
     stats: list[dict] = []
     kept = Counter()
+    month = started[:7]
+    cfg["_known_ids"] = {r[0] for r in db.execute("SELECT id FROM items")}
+    # Queries whose last two runs each added no new items (first_seen == that run) rest a week.
+    last_runs = [r[0] for r in db.execute(
+        "SELECT DISTINCT run FROM query_stats WHERE source='tavily' ORDER BY run DESC LIMIT 2")]
+    if len(last_runs) == 2:
+        new_by = defaultdict(set)
+        for q, run in db.execute(
+                f"SELECT o.query, o.run FROM observations o JOIN items i ON i.id=o.item_id "
+                f"WHERE o.source='tavily' AND i.first_seen=o.run AND o.run IN (?,?)", last_runs):
+            new_by[q].add(run)
+        ran_both = {q for (q,) in db.execute(
+            "SELECT query FROM query_stats WHERE source='tavily' AND run IN (?,?) GROUP BY query HAVING COUNT(DISTINCT run)=2",
+            last_runs)}
+        cfg["_resting_queries"] = {q for q in ran_both if not new_by.get(q)}
+    cfg["_tavily_month_spent"] = db.execute(
+        "SELECT COALESCE(SUM(credits),0) FROM usage WHERE source='tavily' AND substr(run,1,7)=?", (month,)).fetchone()[0]
     for name in sources:
         print(f"Collecting from {name}…")
         for raw in COLLECTORS[name](cfg, days, stats):
@@ -780,6 +857,8 @@ def cmd_collect(cfg: dict, db: sqlite3.Connection, sources: list[str], days: int
     db.executemany("INSERT INTO query_stats VALUES (?,?,?,?,?,?,?)", [
         (started, st["source"], st["query"], st["results"], kept[(st["source"], st["query"])],
          int(st["capped"]), st["error"]) for st in stats])
+    if cfg.get("_tavily_spent"):
+        db.execute("INSERT INTO usage VALUES (?,?,?,?)", (started, "tavily", cfg["_tavily_spent"], "run"))
     db.execute("INSERT OR REPLACE INTO runs (started, sources, fetched, new, lookback) VALUES (?,?,?,?,?)",
                (started, ",".join(sources), fetched, new, days))
     db.commit()
@@ -922,6 +1001,11 @@ def cmd_report(cfg: dict, db: sqlite3.Connection, do_summary: bool) -> None:
     stats = [dict(r) for r in db.execute("SELECT * FROM query_stats WHERE run=?", (last["started"],))] if last else []
     earliest = db.execute("SELECT MIN(COALESCE(NULLIF(published,''), substr(first_seen,1,10))) FROM items").fetchone()[0]
     first_run = db.execute("SELECT MIN(started) FROM runs").fetchone()[0]
+    month = now_iso()[:7]
+    cfg["_usage"] = {
+        "month": db.execute("SELECT COALESCE(SUM(credits),0) FROM usage WHERE source='tavily' AND substr(run,1,7)=?", (month,)).fetchone()[0],
+        "run": db.execute("SELECT COALESCE(SUM(credits),0) FROM usage WHERE source='tavily' AND run=?", (last["started"] if last else "",)).fetchone()[0],
+    }
     write_csv(ROOT / s["csv_path"], shown)
     out = ROOT / s["report_path"]
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -1429,9 +1513,9 @@ def _beyond_section(cfg, p, cur) -> str:
     quiet = [v for v in vmeta if v not in by_voice]
     voices_html = _more(vrows, 4, "moves", "<li class='mut'>No tracked voices mentioned this period.</li>")
     if quiet:
-        voices_html += ("<p class='quiet'><span class='lbl'>Also tracked, not seen this period</span> "
-                        + ", ".join(f"{html.escape(v)} <small>({html.escape(vmeta[v].get('affiliation', ''))})</small>"
-                                    for v in quiet) + "</p>")
+        names = ", ".join(f"{html.escape(v)} <small>({html.escape(vmeta[v].get('affiliation', ''))})</small>" for v in quiet)
+        voices_html += (f"<details class='more quiet'><summary>Also tracked: {len(quiet)} not seen this period</summary>"
+                        f"<p>{names}</p></details>")
 
     # --- academic & research ------------------------------------------------
     acad = [i for i in cur if i.get("kind") == "Academic"]
@@ -1472,7 +1556,7 @@ def _beyond_section(cfg, p, cur) -> str:
 <div class="panel"><h3>News from others <small>· items that name no tracked competitor, same story merged</small></h3>
 {news_html}</div>
 <div class="cols" style="margin-top:12px">
- <div class="panel"><h3>Industry voices</h3>{voices_html}
+ <div class="panel"><h3>Industry voices <small>· commentators, researchers and competitor executives</small></h3>{voices_html}
   <div class="rank-head"><h4>People to watch <small>· speaking about synthetic, not on the voices list, with their latest post</small></h4><span class="lbl">Items</span></div>{people_html}</div>
  <div class="panel"><h3>Academic &amp; research</h3>{acad_html}</div>
 </div>"""
@@ -1544,6 +1628,14 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
 </section>"""
 
 
+def _usage_line(cfg) -> str:
+    u, t = cfg.get("_usage"), cfg.get("tavily", {})
+    if not u:
+        return ""
+    return (f"<p class='mut'>Tavily credits: {u['run']} last run · {u['month']} so far this month · "
+            f"caps {t.get('credits_per_run', 190)} per run, {t.get('credits_per_month', 950)} per month (free tier 1,000)</p>")
+
+
 def _coverage_section(cfg, stats, last, earliest) -> str:
     if not last:
         return ""
@@ -1587,6 +1679,7 @@ def _coverage_section(cfg, stats, last, earliest) -> str:
 <h2 data-sec="coverage" id="coverage"><span class="eyebrow">Last run</span>Coverage &amp; blind spots</h2>
 <p class="mut">Last run {html.escape(last['started'][:16].replace('T', ' '))} UTC · sources: {html.escape(last['sources'])}
  · lookback {lb or '?'} days · data back to {html.escape(earliest or '—')}</p>
+{_usage_line(cfg)}
 <div class="scroll"><table class="mom"><thead><tr><th>Source</th><th>Queries</th><th>Results</th><th>Kept</th>
 <th>Empty</th><th>Capped</th><th>Errors</th></tr></thead><tbody>{rows or '<tr><td colspan=7>No query stats for this run.</td></tr>'}</tbody></table></div>
 {details}
@@ -1796,7 +1889,7 @@ h4{{font:500 11px var(--f-mono);margin:18px 0 8px;color:var(--mut);text-transfor
 .panel,.kpi,.brief{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;min-width:0}}
 .cols{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:14px;align-items:start}}
 .legend{{font-size:12px;color:var(--mut);margin:6px 0 0}}.legend b{{color:var(--fg);font-weight:500}}
-.quiet{{font-size:13px;color:var(--mut);margin:12px 0 0;padding-top:10px;border-top:1px solid var(--soft)}}.quiet .lbl{{display:block;margin-bottom:4px}}
+.quiet{{font-size:13px;color:var(--mut);margin:12px 0 0;padding-top:6px;border-top:1px solid var(--soft)}}.quiet p{{margin:4px 0 0}}
 tr.self th,tr.self td.num,li.self{{color:var(--acc)}}tr.self th::after,li.self span::after{{content:" ◆";font-size:10px}}
 .rank-head{{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:10px}}
 .rank-head h3,.rank-head h4{{margin:0}}small.hl a{{color:var(--mut);text-decoration:underline;text-decoration-color:var(--line)}}small.hl a:hover{{color:var(--acc)}}.rank-head h4{{margin-top:18px}}.rank-head .lbl{{flex:0 0 72px;text-align:right;white-space:nowrap}}
@@ -1994,8 +2087,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["collect", "report", "run"])
     ap.add_argument("--config", default=str(ROOT / "config.toml"))
-    ap.add_argument("--sources", default="news,tavily,brave,serpapi,arxiv,inbox",
-                    help="comma-separated: " + ",".join(COLLECTORS))
+    ap.add_argument("--sources", default=None,
+                    help="comma-separated: " + ",".join(COLLECTORS) + " (default: sources in config.toml)")
     ap.add_argument("--days", type=int, default=None,
                     help="collection lookback in days (default: lookback_days in config)")
     ap.add_argument("--summarize", action="store_true",
@@ -2007,7 +2100,8 @@ def main() -> None:
         print("Keys loaded from keys.env: " + ", ".join(keys))
     cfg = load_config(Path(a.config))
     db = open_db(ROOT / cfg["settings"]["db_path"])
-    sources = [s.strip() for s in a.sources.split(",") if s.strip()]
+    chosen = a.sources.split(",") if a.sources else cfg["settings"].get("sources", list(COLLECTORS))
+    sources = [s.strip() for s in chosen if s.strip()]
     bad = [s for s in sources if s not in COLLECTORS]
     if bad:
         ap.error(f"unknown source(s): {', '.join(bad)}")

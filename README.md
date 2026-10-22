@@ -128,3 +128,20 @@ to it.
 - **Sign-ups:** teammates enter their @qualtrics.com address in the box at the top of the page. The owner
   sees the subscriber list there (no one else can) and approves or removes people. Only approved
   @qualtrics.com addresses are emailed, in Bcc. Change the allowed domains under `[email]` in `config.toml`.
+
+## LinkedIn search settings (Tavily)
+
+- **LinkedIn only.** Tavily searches are restricted to linkedin.com (`include_domains`). Google News and
+  arXiv are separate free sources for industry and academic context; set `sources` in `config.toml` to
+  choose which run (e.g. `["tavily", "inbox"]` for LinkedIn only).
+- **Depth.** Main searches use `advanced` (2 credits; finds more posts and returns fuller text). Extra
+  phrasings for searches that fill the 20-result limit use `basic` (1 credit).
+- **Budget.** `credits_per_run` (190) and `credits_per_month` (950) cap spending under the free 1,000;
+  main searches run first and the rest are skipped once a cap is near. Usage is shown in the report's
+  Coverage section. Tavily is only called by collection runs (the Monday task), never by people viewing
+  or filtering the report.
+- **Dates.** LinkedIn post dates come from the post ID in the URL (activity / ugcPost / share IDs encode
+  their creation time). Pulse articles and company pages have no ID, so they show the date they were found.
+- **Executives.** Competitor founders and executives are listed under `[[voices]]` with a `company`. Their
+  posts count toward that company when they name it or are about synthetic research. One search per
+  company covers its leadership. Update the list when leadership changes.
