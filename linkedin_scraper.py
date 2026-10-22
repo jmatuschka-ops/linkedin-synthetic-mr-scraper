@@ -2064,7 +2064,11 @@ ol,ul{{overflow-wrap:anywhere}}
 table{{border-collapse:collapse;width:100%}}th,td{{padding:9px 12px;text-align:left;vertical-align:top}}
 .heat thead th,.mom thead th{{font:500 11px var(--f-mono);letter-spacing:.04em;text-transform:uppercase;color:var(--mut);white-space:nowrap;border-bottom:1px solid var(--line)}}
 .heat td.n{{text-align:center;font:500 13px var(--f-mono);background:color-mix(in srgb,var(--acc) calc(var(--a)*100%),transparent);
-border:1px solid var(--soft);min-width:58px}}
+border:1px solid var(--soft)}}
+/* Heatmaps fit the column: headings wrap instead of forcing a sideways scroll */
+.heat{{table-layout:fixed}}.heat thead th{{white-space:normal;line-height:1.25;vertical-align:bottom;padding:8px 6px;
+overflow-wrap:break-word;hyphens:auto}}.heat thead th:first-child,.heat .rh{{width:150px}}.heat td.n{{padding:9px 4px}}
+@media (max-width:820px){{.heat{{table-layout:auto}}.heat thead th{{min-width:64px}}}}
 .heat .rh,.mom .rh{{color:var(--fg);white-space:nowrap;font-weight:500}}
 .mom tbody tr+tr{{border-top:1px solid var(--soft)}}.mom td.num{{font:13px var(--f-mono);white-space:nowrap}}
 .feed tr+tr{{border-top:1px solid var(--soft)}}.feed tr:hover{{background:color-mix(in srgb,var(--soft) 55%,transparent)}}
@@ -2139,6 +2143,7 @@ if(t)t.scrollIntoView({{block:'start'}})}}));
 // "Show more" list into the visible list, so pairs end level without empty space or stretching.
 function balance(root){{(root||document).querySelectorAll('.cols').forEach(row=>{{
  const cards=[...row.children]; if(cards.length<2) return;
+ row.classList.remove('even');   // measure natural heights, not the stretched ones
  const tops=new Set(cards.map(c=>Math.round(c.getBoundingClientRect().top))); if(tops.size>1) return; // stacked on narrow screens
  for(let guard=0;guard<40;guard++){{
   const hs=cards.map(c=>c.getBoundingClientRect().height), tall=Math.max(...hs);
