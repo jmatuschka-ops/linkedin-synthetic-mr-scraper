@@ -918,9 +918,12 @@ def cmd_collect(cfg: dict, db: sqlite3.Connection, sources: list[str], days: int
           + (f", {capped} hit the result cap" if capped else "") + ".")
 
 
-def load_items(db: sqlite3.Connection, days: int, cfg: dict | None = None) -> list[dict]:
-    """Items dated within `days`. With cfg, tags are recomputed so edits to
-    config.toml apply to everything already collected."""
+def load_items(db: sqlite3.Connection, days: int, cfg: dict | None = None,
+               undated_out: list | None = None) -> list[dict]:
+    """Items published within `days`. Only items with a known publish date are returned: an item
+    with no date (some Pulse articles, company pages) could be years old, so it never counts toward
+    a period; pass undated_out to collect those found within `days` separately. With cfg, tags are
+    recomputed so edits to config.toml apply to everything already collected."""
     cutoff = (today() - timedelta(days=days)).isoformat()
     out = []
     for r in db.execute("SELECT * FROM items"):
@@ -935,6 +938,10 @@ def load_items(db: sqlite3.Connection, days: int, cfg: dict | None = None) -> li
                 continue
         d["date"] = item_date(d)
         d["dated"] = bool(norm_date(d.get("published", "")) or linkedin_date(d.get("url", "")))
+        if not d["dated"]:
+            if undated_out is not None and d["first_seen"][:10] >= cutoff:
+                undated_out.append(d)
+            continue
         if d["date"] >= cutoff:
             out.append(d)
     out.sort(key=lambda d: (d["date"], d["first_seen"]), reverse=True)
@@ -1041,8 +1048,11 @@ def cmd_report(cfg: dict, db: sqlite3.Connection, do_summary: bool) -> None:
     s = cfg["settings"]
     periods = s["report_periods"]
     longest = max(periods)
-    all_items = load_items(db, 2 * longest, cfg)  # includes the prior window for comparisons
-    load_attention(db, all_items)
+    undated: list[dict] = []
+    all_items = load_items(db, 2 * longest, cfg, undated)  # includes the prior window for comparisons
+    undated.sort(key=lambda d: d["first_seen"], reverse=True)
+    cfg["_undated"] = undated
+    load_attention(db, all_items + undated)
     shown = [i for i in all_items if i["date"] >= (today() - timedelta(days=longest)).isoformat()]
     if do_summary:
         summarize(cfg, db, shown)
@@ -1057,7 +1067,7 @@ def cmd_report(cfg: dict, db: sqlite3.Connection, do_summary: bool) -> None:
         "month": db.execute("SELECT COALESCE(SUM(credits),0) FROM usage WHERE source='tavily' AND substr(run,1,7)=?", (month,)).fetchone()[0],
         "run": db.execute("SELECT COALESCE(SUM(credits),0) FROM usage WHERE source='tavily' AND run=?", (last["started"] if last else "",)).fetchone()[0],
     }
-    write_csv(ROOT / s["csv_path"], shown)
+    write_csv(ROOT / s["csv_path"], shown + undated)
     out = ROOT / s["report_path"]
     out.parent.mkdir(parents=True, exist_ok=True)
     page = render_html(cfg, all_items, briefs, dict(last) if last else None, stats, earliest, first_run)
@@ -1412,11 +1422,12 @@ def _plabel(p: int) -> str:
 
 SECTION_DESC = {
     "summary": "What changed in this period: who's getting attention, the key moves, and momentum against the period before.",
-    "new": "What the latest weekly run found that was posted in the last 14 days, newest first. Older posts it found for the first time are listed underneath.",
+    "new": "What the latest weekly run found that was posted recently (within the selected period, up to 14 days), newest first.",
     "rising": "The individual posts and articles drawing the most attention in this period, from anyone: ranked by engagement, search prominence and how widely they're covered.",
     "beyond": "Who's talking about synthetic research outside the tracked competitors: other companies, industry voices, executives and researchers.",
     "overview": "Counts for the tracked competitors in this period: share of voice, capabilities, and what kind of activity each one shows.",
     "items": "Everything collected in this period, newest first.",
+    "undated": "Pages with no publish date: LinkedIn articles whose page doesn't state one, and company pages. They could be from any time, so they're kept out of every period view above.",
 }
 
 
@@ -1664,9 +1675,9 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
     # older posts (and pages LinkedIn doesn't date) found for the first time go underneath.
     run_new = sorted((it for it in all_items if last_run and it["first_seen"] == last_run),
                      key=lambda i: (i.get("dated", True), i["date"]), reverse=True)
-    fresh_cut = (today() - timedelta(days=14)).isoformat()
+    fresh_cut = (today() - timedelta(days=min(14, p))).isoformat()   # never older than the selected period
     new_items = [it for it in run_new if it.get("dated", True) and it["date"] >= fresh_cut]
-    older_new = [it for it in run_new if it not in new_items]
+
     market_caps = Counter(c for it in items if it.get("url_type") not in NOT_ACTIVITY for c in it["capabilities"])
 
     def row(it):
@@ -1692,9 +1703,8 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
 {_trends_section(cfg, p, cur, prev, briefs, earliest, seg, first_run)}
 {_h2("new", "New this run")}
 {_filterbar(new_items[:60])}
-<div class="scroll"><table class="feed filt"><tbody>{"".join(row(i) for i in new_items[:60]) or "<tr><td>Nothing posted in the last 14 days was new this run.</td></tr>"}</tbody></table></div>
+<div class="scroll"><table class="feed filt"><tbody>{"".join(row(i) for i in new_items[:60]) or f"<tr><td>Nothing posted in the last {min(14, p)} days was new this run.</td></tr>"}</tbody></table></div>
 <button type="button" class="expand" hidden></button>
-{f"<details class='more older'><summary>Also found this run: {len(older_new)} posted earlier, or undated</summary><div class='scroll'><table class='feed'><tbody>" + "".join(row(i) for i in older_new[:80]) + "</tbody></table></div></details>" if older_new else ""}
 {_attention_section(cfg, p, cur, any_counts)}
 {_beyond_section(cfg, p, cur)}
 {_h2("overview", "Overview", p)}
@@ -1718,6 +1728,20 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
 <div class="scroll"><table class="feed all filt"><tbody>{"".join(row(i) for i in items) or "<tr><td>No items in this period.</td></tr>"}</tbody></table></div>
 <button type="button" class="expand" hidden></button>
 </section>"""
+
+
+def _undated_section(cfg) -> str:
+    und = cfg.get("_undated", [])
+    if not und:
+        return ""
+    rows = "".join(
+        f"<tr data-ch='{html.escape(i['channel'])}' data-tags=''><td class='d'><span class='dl'>Posted</span> —<br>"
+        f"<span class='dl'>Found</span> {html.escape(i['first_seen'][:10])}</td>"
+        f"<td class='d'><span class='ch ch-{html.escape(i['channel'])}'>{html.escape(i['channel'])}</span><br><small>{html.escape(i['url_type'])}</small></td>"
+        f"<td><div class='t'>{_link(i, i['title'])}</div><div>{_tags(i)}</div></td></tr>" for i in und)
+    return (f"<section class='undated'>{_h2('undated', 'Undated items')}"
+            f"<details class='more'><summary>Show {len(und)} undated items</summary>"
+            f"<div class='scroll'><table class='feed'><tbody>{rows}</tbody></table></div></details></section>")
 
 
 def _usage_line(cfg) -> str:
@@ -2097,6 +2121,7 @@ ul.ql{{font-size:13px;margin:4px 0 0}}details{{margin-top:10px}}summary{{cursor:
  <div class="bar-row"><span class="lbl">Jump to</span><div class="jump" aria-label="Jump to section">{jumps}</div></div>
 </nav>
 {panels}
+{_undated_section(cfg)}
 {_coverage_section(cfg, stats, last, earliest)}
 <p class="disclaimer">Tags are keyword-based and approximate. Verify before citing.</p>
 </main><script>
