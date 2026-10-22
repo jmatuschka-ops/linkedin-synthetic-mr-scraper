@@ -1717,9 +1717,9 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
 </div>
 <div class="cols">
  <div class="panel"><h3>Share of voice <small>· items naming each company</small></h3>{lb or "<ul class='lb'><li>No data yet</li></ul>"}</div>
- <div class="panel"><h3>Capabilities discussed <small>· items mentioning each, market-wide</small></h3>{caps or "<ul class='lb'><li>No data yet</li></ul>"}
- <p class='foot'>Number of items (posts, articles, news, papers) that mention each capability, across everything collected, not only the watchlist. An item mentioning a capability many times counts once, and an item can mention several. Company pages and job listings aren't counted.</p></div>
+ <div class="panel"><h3>Capabilities discussed <small>· items mentioning each, market-wide</small></h3>{caps or "<ul class='lb'><li>No data yet</li></ul>"}</div>
 </div>
+<p class='foot foot-out'>Capabilities: number of items (posts, articles, news, papers) that mention each capability, across everything collected, not only the watchlist. An item mentioning a capability many times counts once, and an item can mention several. Company pages and job listings aren't counted.</p>
 <h3 class="sub">Competitor × signal type</h3>{_heat(sig_m, comps, sig_cols, "Competitor", cell_items=sig_items, key=f"p{p}s")}
 <h3 class="sub">Competitor × capability</h3>{_heat(cap_m, comps, cap_cols, "Competitor", cell_items=cap_items, key=f"p{p}c")}
 {"<h3 class='sub'>AI briefs</h3><div class='briefs'>" + brief_html + "</div>" if brief_html else ""}
@@ -2023,7 +2023,7 @@ details.more>summary{{list-style:none;cursor:pointer;display:inline-block;font:5
 padding:6px 0 2px}}details.more>summary::-webkit-details-marker{{display:none}}
 details.more>summary::before{{content:"+ "}}details.more[open]>summary::before{{content:"− "}}
 details.more[open]>summary{{margin-bottom:4px}}
-.cols>*{{min-width:0}}
+.cols>*{{min-width:0}}.cols.even{{align-items:stretch}}
 .note{{margin:0 0 10px;font-size:13px;color:var(--mut)}}
 .foot{{margin:12px 0 0;padding-top:10px;border-top:1px dashed var(--line);font-size:12.5px;color:var(--mut)}}
 .foot+.foot{{border-top:0;padding-top:0;margin-top:6px}}
@@ -2158,6 +2158,9 @@ function balance(root){{(root||document).querySelectorAll('.cols').forEach(row=>
   if(card.getBoundingClientRect().height<other-8){{vis.appendChild(li);break}}
   d.querySelector('summary').textContent='Show '+d.querySelector('ul').children.length+' more';
  }}
+ // Whatever gap is left, give the pair equal box heights.
+ const hs=cards.map(c=>c.getBoundingClientRect().height);
+ row.classList.toggle('even',Math.max(...hs)-Math.min(...hs)>4);
 }})}}
 const _show=show; show=function(p){{_show(p);balance(document.querySelector(`section[data-period="${{p}}"]`))}};
 window.addEventListener('load',()=>balance(document.querySelector('section.period:not([hidden])')));
