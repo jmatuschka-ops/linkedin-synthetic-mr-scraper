@@ -31,6 +31,7 @@ include_domains = ["linkedin.com"]
 # Free tier: 1,000 credits/month. The script stops before either cap; main searches go first.
 credits_per_run = 190
 credits_per_month = 950
+date_check_credits = 20         # of each run's credits, kept for looking up Pulse article publish dates
 # A search that returns the full 20 results is re-run with each of these appended, to reach
 # posts beyond the first 20 (Tavily has no next page). Each costs one search.
 capped_variants = ["launch announcement", "study results accuracy"]   # used in order while credits allow
@@ -72,7 +73,8 @@ context_terms = ["market research", "consumer research", "insights", "survey", "
                  "concept test", "consumer"]
 # Items containing any of these are always dropped (syndicated market-sizing PRs etc.).
 exclude_terms = ["market size", "market share", "cagr", "industry report", "augmented reality",
-                 "market to reach", "forecast period",
+                 "market to reach", "forecast period", "future outlook", "market outlook", "market report",
+                 "market analysis", "market forecast",
                  # non-research "digital twin" industries
                  " road ", " roads", "mobility sector", "manufactur", "factory", "patient", "supply chain",
                  "smart city", "aerospace", "oil and gas", "power grid", "construction", "farming",

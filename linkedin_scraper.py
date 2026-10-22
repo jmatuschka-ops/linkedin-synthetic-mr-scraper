@@ -124,8 +124,11 @@ def open_db(path: Path) -> sqlite3.Connection:
     cols = {r[1] for r in db.execute("PRAGMA table_info(runs)")}
     if "lookback" not in cols:
         db.execute("ALTER TABLE runs ADD COLUMN lookback INTEGER")
-    if "author" not in {r[1] for r in db.execute("PRAGMA table_info(items)")}:
+    icols = {r[1] for r in db.execute("PRAGMA table_info(items)")}
+    if "author" not in icols:
         db.execute("ALTER TABLE items ADD COLUMN author TEXT DEFAULT ''")
+    if "date_checked" not in icols:   # when a Pulse article's publish date was looked up (Tavily Extract)
+        db.execute("ALTER TABLE items ADD COLUMN date_checked TEXT DEFAULT ''")
     return db
 
 
@@ -519,6 +522,7 @@ def collect_tavily(cfg: dict, days: int, stats: list):
     # extra phrasings for searches that filled the result limit.
     budget = min(int(t.get("credits_per_run", 190)),
                  int(t.get("credits_per_month", 950)) - int(cfg.get("_tavily_month_spent", 0)))
+    budget -= int(t.get("date_check_credits", 20))   # kept back for article date lookups after the searches
     spent, skipped = 0, 0
     # No date filter: Tavily rarely knows when a LinkedIn page was published, so date filters
     # silently drop most LinkedIn results. Posts are dated from their URL instead (linkedin_date).
@@ -563,6 +567,48 @@ def collect_tavily(cfg: dict, days: int, stats: list):
     print(f"  tavily: {spent} credits used this run (cap {budget})"
           + (f", {skipped} searches skipped to stay within budget" if skipped else "")
           + (f", {rested} low-yield searches resting this week" if rested else ""))
+
+
+_PUBLISHED = re.compile(r"Published\s+((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+20\d\d)")
+
+
+def enrich_article_dates(cfg: dict, db: sqlite3.Connection, run: str, credits: int) -> int:
+    """LinkedIn Pulse articles have no date in their URL and search results omit it, but the
+    article page states "Published <date>". Read it with Tavily Extract (advanced: 2 credits per
+    5 pages), once per article, within `credits`. Returns credits used."""
+    key = os.environ.get("TAVILY_API_KEY")
+    if not key or credits < 2:
+        return 0
+    rows = db.execute(
+        "SELECT id, url FROM items WHERE channel='linkedin' AND url_type='article' "
+        "AND COALESCE(published,'')='' AND COALESCE(date_checked,'')='' ORDER BY first_seen DESC").fetchall()
+    used, found = 0, 0
+    for i in range(0, len(rows), 5):
+        if used + 2 > credits:
+            break
+        batch = rows[i:i + 5]
+        try:
+            data = http_post_json("https://api.tavily.com/extract",
+                                  {"urls": [r["url"] for r in batch], "extract_depth": "advanced", "format": "text"},
+                                  {"Authorization": f"Bearer {key}"}, timeout=120)
+        except Exception as e:
+            print(f"  ! date lookup failed ({str(e)[:120]})", file=sys.stderr)
+            break
+        used += 2
+        got = {r.get("url"): r.get("raw_content") or "" for r in data.get("results", [])}
+        for r in batch:
+            m = _PUBLISHED.search(got.get(r["url"], ""))
+            d = norm_date(re.sub(r"(\d{1,2}),?\s+(20\d\d)", r"\1, \2", re.sub(r"\s+", " ", m.group(1)).replace(".", ""))) if m else ""
+            found += bool(d)
+            db.execute("UPDATE items SET published=?, date_checked=? WHERE id=?", (d, run, r["id"]))
+        db.commit()
+        time.sleep(cfg["settings"]["request_delay_seconds"])
+    if used:
+        db.execute("INSERT INTO usage VALUES (?,?,?,?)", (run, "tavily", used, "article dates"))
+        db.commit()
+        print(f"  article dates: {found} found for {min(len(rows), (used // 2) * 5)} articles, {used} credits"
+              + (f", {len(rows) - (used // 2) * 5} left for later runs" if len(rows) > (used // 2) * 5 else ""))
+    return used
 
 
 ATOM = {"a": "http://www.w3.org/2005/Atom"}
@@ -859,6 +905,11 @@ def cmd_collect(cfg: dict, db: sqlite3.Connection, sources: list[str], days: int
          int(st["capped"]), st["error"]) for st in stats])
     if cfg.get("_tavily_spent"):
         db.execute("INSERT INTO usage VALUES (?,?,?,?)", (started, "tavily", cfg["_tavily_spent"], "run"))
+    if "tavily" in sources:
+        t = cfg.get("tavily", {})
+        left = min(int(t.get("credits_per_run", 190)) - int(cfg.get("_tavily_spent", 0)),
+                   int(t.get("credits_per_month", 950)) - int(cfg.get("_tavily_month_spent", 0)) - int(cfg.get("_tavily_spent", 0)))
+        enrich_article_dates(cfg, db, started, max(0, left))
     db.execute("INSERT OR REPLACE INTO runs (started, sources, fetched, new, lookback) VALUES (?,?,?,?,?)",
                (started, ",".join(sources), fetched, new, days))
     db.commit()
@@ -1262,19 +1313,35 @@ def _arrow(cur: int, prev: int) -> str:
 # HTML report
 # --------------------------------------------------------------------------
 
-def _heat(matrix: dict, rows: list[str], cols: list[str], row_label: str, highlight: str = "Qualtrics") -> str:
+def _heat(matrix: dict, rows: list[str], cols: list[str], row_label: str, highlight: str = "Qualtrics",
+          cell_items: dict | None = None, key: str = "") -> str:
+    """Heatmap; with cell_items, each number opens the list of items behind it."""
     peak = max([v for r in matrix.values() for v in r.values()] or [1])
     head = "".join(f"<th>{html.escape(c)}</th>" for c in cols)
-    body = []
-    for r in rows:
+    body, drills = [], []
+    for ri, r in enumerate(rows):
         cells = []
-        for c in cols:
+        for ci, c in enumerate(cols):
             v = matrix[r].get(c, 0)
             a = 0 if not v else 0.12 + 0.75 * v / peak
-            cells.append(f'<td class="n" style="--a:{a:.2f}">{v or ""}</td>')
+            its = (cell_items or {}).get((r, c), [])
+            if v and its:
+                did = f"{key}-{ri}-{ci}"
+                cells.append(f'<td class="n" style="--a:{a:.2f}"><button type="button" class="cellbtn" data-drill="{did}" '
+                             f'aria-label="{html.escape(r)}, {html.escape(c)}: {v} items">{v}</button></td>')
+                lis = "".join(f"<li><div class='t'>{_link(i, _clean_title(i['title']))}</div>"
+                              f"<div class='meta'>{_dlabel(i)} · {html.escape(i['channel'])}"
+                              f"{' · ' + html.escape(i['author']) if i.get('author') else ''}</div></li>"
+                              for i in sorted(its, key=lambda i: i["date"], reverse=True))
+                drills.append(f"<div class='drill panel' data-drill-box='{did}' hidden><div class='rank-head'><h3>{html.escape(r)} · "
+                              f"{html.escape(c)} <small>· {len(its)} item{'s' if len(its) != 1 else ''}</small></h3>"
+                              f"<button type='button' class='drill-close' aria-label='Close'>×</button></div><ul class='moves'>{lis}</ul></div>")
+            else:
+                cells.append(f'<td class="n" style="--a:{a:.2f}">{v or ""}</td>')
         body.append(f"<tr{' class=self' if r == highlight else ''}><th class='rh'>{html.escape(r)}</th>{''.join(cells)}</tr>")
+    hint = "<p class='foot foot-out'>Click a number to see the items behind it.</p>" if drills else ""
     return (f"<div class='scroll'><table class='heat'><thead><tr><th>{row_label}</th>{head}</tr>"
-            f"</thead><tbody>{''.join(body)}</tbody></table></div>")
+            f"</thead><tbody>{''.join(body)}</tbody></table></div>{hint}{''.join(drills)}")
 
 
 def _tags(it: dict) -> str:
@@ -1343,9 +1410,20 @@ def _plabel(p: int) -> str:
     return "Last week" if p == 7 else f"Last {p} days"
 
 
+SECTION_DESC = {
+    "summary": "What changed in this period: who's getting attention, the key moves, and momentum against the period before.",
+    "new": "What the latest weekly run found that was posted in the last 14 days, newest first. Older posts it found for the first time are listed underneath.",
+    "rising": "The individual posts and articles drawing the most attention in this period, from anyone: ranked by engagement, search prominence and how widely they're covered.",
+    "beyond": "Who's talking about synthetic research outside the tracked competitors: other companies, industry voices, executives and researchers.",
+    "overview": "Counts for the tracked competitors in this period: share of voice, capabilities, and what kind of activity each one shows.",
+    "items": "Everything collected in this period, newest first.",
+}
+
+
 def _h2(sec: str, title: str, p: int | None = None) -> str:
-    eyebrow = f"<span class='eyebrow'>{_plabel(p)}</span>" if p else ""
-    return f"<h2 data-sec='{sec}'>{eyebrow}{title}</h2>"
+    eyebrow = f"<span class='eyebrow'>{_plabel(p) if p else 'Latest run'}</span>" if p or sec == "new" else ""
+    desc = f"<p class='lede'>{SECTION_DESC[sec]}</p>" if sec in SECTION_DESC else ""
+    return f"<h2 data-sec='{sec}'>{eyebrow}{title}</h2>{desc}"
 
 
 LINKEDIN_SOURCES = ("tavily", "brave", "serpapi")
@@ -1570,12 +1648,25 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
     comps = [c for c, _ in comp_count.most_common()]
     sig_cols, cap_cols = list(cfg["signals"]), list(cfg["capabilities"])
     sig_m, cap_m = defaultdict(Counter), defaultdict(Counter)
+    sig_items, cap_items = defaultdict(list), defaultdict(list)
     for it in items:
+        if it.get("url_type") in NOT_ACTIVITY:
+            continue
         for c in it["competitors"]:
             sig_m[c].update(it["signals"])
             cap_m[c].update(it["capabilities"])
+            for x in it["signals"]:
+                sig_items[(c, x)].append(it)
+            for x in it["capabilities"]:
+                cap_items[(c, x)].append(it)
     channel_count = Counter(it["channel"] for it in items)
-    new_items = [it for it in items if last_run and it["first_seen"] == last_run]
+    # New this run: first found in the latest run. Lead with what was actually posted recently;
+    # older posts (and pages LinkedIn doesn't date) found for the first time go underneath.
+    run_new = sorted((it for it in all_items if last_run and it["first_seen"] == last_run),
+                     key=lambda i: (i.get("dated", True), i["date"]), reverse=True)
+    fresh_cut = (today() - timedelta(days=14)).isoformat()
+    new_items = [it for it in run_new if it.get("dated", True) and it["date"] >= fresh_cut]
+    older_new = [it for it in run_new if it not in new_items]
     market_caps = Counter(c for it in items if it.get("url_type") not in NOT_ACTIVITY for c in it["capabilities"])
 
     def row(it):
@@ -1599,12 +1690,17 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
 
     return f"""<section class="period" data-period="{p}"{hidden}>
 {_trends_section(cfg, p, cur, prev, briefs, earliest, seg, first_run)}
+{_h2("new", "New this run")}
+{_filterbar(new_items[:60])}
+<div class="scroll"><table class="feed filt"><tbody>{"".join(row(i) for i in new_items[:60]) or "<tr><td>Nothing posted in the last 14 days was new this run.</td></tr>"}</tbody></table></div>
+<button type="button" class="expand" hidden></button>
+{f"<details class='more older'><summary>Also found this run: {len(older_new)} posted earlier, or undated</summary><div class='scroll'><table class='feed'><tbody>" + "".join(row(i) for i in older_new[:80]) + "</tbody></table></div></details>" if older_new else ""}
 {_attention_section(cfg, p, cur, any_counts)}
 {_beyond_section(cfg, p, cur)}
 {_h2("overview", "Overview", p)}
 <div class="kpis">
  <div class="kpi"><b>{len(items)}</b>items tracked</div>
- <div class="kpi"><b>{len(new_items)}</b>new this run</div>
+ <div class="kpi"><b>{len(new_items)}</b>newly posted this run</div>
  <div class="kpi"><b>{channel_count.get("linkedin", 0)}</b>LinkedIn items</div>
  <div class="kpi"><b>{channel_count.get("news", 0)}</b>news items</div>
  <div class="kpi"><b>{len(comps)}</b>competitors active</div>
@@ -1614,13 +1710,9 @@ def _period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_
  <div class="panel"><h3>Capabilities discussed <small>· items mentioning each, market-wide</small></h3>{caps or "<ul class='lb'><li>No data yet</li></ul>"}
  <p class='foot'>Number of items (posts, articles, news, papers) that mention each capability, across everything collected, not only the watchlist. An item mentioning a capability many times counts once, and an item can mention several. Company pages and job listings aren't counted.</p></div>
 </div>
-<h3 class="sub">Competitor × signal type</h3>{_heat(sig_m, comps, sig_cols, "Competitor")}
-<h3 class="sub">Competitor × capability</h3>{_heat(cap_m, comps, cap_cols, "Competitor")}
+<h3 class="sub">Competitor × signal type</h3>{_heat(sig_m, comps, sig_cols, "Competitor", cell_items=sig_items, key=f"p{p}s")}
+<h3 class="sub">Competitor × capability</h3>{_heat(cap_m, comps, cap_cols, "Competitor", cell_items=cap_items, key=f"p{p}c")}
 {"<h3 class='sub'>AI briefs</h3><div class='briefs'>" + brief_html + "</div>" if brief_html else ""}
-<h3 class="sub">New this run</h3>
-{_filterbar(new_items[:50])}
-<div class="scroll"><table class="feed filt"><tbody>{"".join(row(i) for i in new_items[:50]) or "<tr><td>Nothing new.</td></tr>"}</tbody></table></div>
-<button type="button" class="expand" hidden></button>
 {_h2("items", "All items", p)}
 {_filterbar(items)}
 <div class="scroll"><table class="feed all filt"><tbody>{"".join(row(i) for i in items) or "<tr><td>No items in this period.</td></tr>"}</tbody></table></div>
@@ -1806,7 +1898,7 @@ def render_html(cfg, all_items, briefs, last, stats, earliest, first_run) -> str
         f"<button type='button' data-p='{p}' aria-pressed='{str(p == default).lower()}'>"
         f"{'Last week' if p == 7 else f'{p} days'}</button>" for p in periods)
     jumps = "".join(f"<button type='button' data-jump='{k}'>{v}</button>" for k, v in (
-        ("summary", "Summary"), ("rising", "Rising"), ("beyond", "Beyond the watchlist"),
+        ("summary", "Summary"), ("new", "New this run"), ("rising", "Rising"), ("beyond", "Beyond the watchlist"),
         ("overview", "Overview"), ("items", "All items"), ("coverage", "Coverage")))
     panels = "".join(_period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_counts) for p in periods)
     linkedin_on = _has_linkedin_source(last, stats)
@@ -1888,6 +1980,12 @@ h3.sub{{font-size:14px;margin:26px 0 10px;color:var(--fg)}}
 h4{{font:500 11px var(--f-mono);margin:18px 0 8px;color:var(--mut);text-transform:uppercase;letter-spacing:.08em}}
 .panel,.kpi,.brief{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;min-width:0}}
 .cols{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:14px;align-items:start}}
+h2+.lede{{margin:-6px 0 14px;color:var(--mut);max-width:80ch}}
+.cellbtn{{font:inherit;width:100%;background:none;border:0;color:inherit;cursor:pointer;padding:0;text-decoration:underline;
+text-decoration-color:color-mix(in srgb,currentColor 35%,transparent);text-underline-offset:3px}}
+.cellbtn[aria-expanded=true]{{font-weight:700;text-decoration-color:currentColor}}
+.drill{{margin-top:10px;border-color:var(--acc)}}.drill-close{{font:20px/1 var(--f-body);background:none;border:0;color:var(--mut);cursor:pointer}}
+details.older{{margin-top:10px}}details.older>summary{{font-size:13px}}
 .legend{{font-size:12px;color:var(--mut);margin:6px 0 0}}.legend b{{color:var(--fg);font-weight:500}}
 .quiet{{font-size:13px;color:var(--mut);margin:12px 0 0;padding-top:6px;border-top:1px solid var(--soft)}}.quiet p{{margin:4px 0 0}}
 tr.self th,tr.self td.num,li.self{{color:var(--acc)}}tr.self th::after,li.self span::after{{content:" ◆";font-size:10px}}
@@ -2038,6 +2136,16 @@ function balance(root){{(root||document).querySelectorAll('.cols').forEach(row=>
 }})}}
 const _show=show; show=function(p){{_show(p);balance(document.querySelector(`section[data-period="${{p}}"]`))}};
 window.addEventListener('load',()=>balance(document.querySelector('section.period:not([hidden])')));
+// Heatmap cells open the list of items behind the number (one open per table).
+document.querySelectorAll('.cellbtn').forEach(b=>b.addEventListener('click',()=>{{
+ const box=document.querySelector(`[data-drill-box="${{b.dataset.drill}}"]`), wrap=b.closest('.scroll').parentElement;
+ const open=!box.hidden;
+ b.closest('.scroll').querySelectorAll('.cellbtn').forEach(x=>x.setAttribute('aria-expanded','false'));
+ let n=b.closest('.scroll').nextElementSibling; while(n&&(n.classList.contains('drill')||n.classList.contains('foot'))){{if(n.classList.contains('drill'))n.hidden=true;n=n.nextElementSibling}}
+ if(!open){{box.hidden=false;b.setAttribute('aria-expanded','true');box.scrollIntoView({{block:'nearest'}})}}
+}}));
+document.querySelectorAll('.drill-close').forEach(x=>x.addEventListener('click',()=>{{const box=x.closest('.drill');box.hidden=true;
+ const b=document.querySelector(`.cellbtn[data-drill="${{box.dataset.drillBox}}"]`);if(b){{b.setAttribute('aria-expanded','false');b.focus()}}}}));
 // Item tables start with their first 10 rows; filtering searches every row.
 const FIRST=10;
 document.querySelectorAll('.filters').forEach(f=>{{
@@ -2085,7 +2193,7 @@ def load_keys() -> list[str]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["collect", "report", "run"])
+    ap.add_argument("command", choices=["collect", "report", "run", "dates"])
     ap.add_argument("--config", default=str(ROOT / "config.toml"))
     ap.add_argument("--sources", default=None,
                     help="comma-separated: " + ",".join(COLLECTORS) + " (default: sources in config.toml)")
@@ -2105,6 +2213,11 @@ def main() -> None:
     bad = [s for s in sources if s not in COLLECTORS]
     if bad:
         ap.error(f"unknown source(s): {', '.join(bad)}")
+    if a.command == "dates":   # look up publish dates for undated LinkedIn articles
+        t = cfg.get("tavily", {})
+        month_spent = db.execute("SELECT COALESCE(SUM(credits),0) FROM usage WHERE source='tavily' AND substr(run,1,7)=?",
+                                 (now_iso()[:7],)).fetchone()[0]
+        enrich_article_dates(cfg, db, now_iso(), int(t.get("credits_per_month", 950)) - month_spent)
     if a.command in ("collect", "run"):
         cmd_collect(cfg, db, sources, a.days or cfg["settings"]["lookback_days"])
     if a.command in ("report", "run"):

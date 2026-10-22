@@ -141,7 +141,11 @@ to it.
   Coverage section. Tavily is only called by collection runs (the Monday task), never by people viewing
   or filtering the report.
 - **Dates.** LinkedIn post dates come from the post ID in the URL (activity / ugcPost / share IDs encode
-  their creation time). Pulse articles and company pages have no ID, so they show the date they were found.
+  their creation time). Pulse articles have no ID, so their "Published" date is read once from the article
+  page with Tavily Extract (2 credits per 5 articles, from `date_check_credits`); run
+  `python3 linkedin_scraper.py dates` to clear a backlog. Company pages have no publish date.
+- **New this run** lists items first found in the latest run that were posted in the last 14 days; older
+  posts found for the first time are folded underneath.
 - **Executives.** Competitor founders and executives are listed under `[[voices]]` with a `company`. Their
   posts count toward that company when they name it or are about synthetic research. One search per
   company covers its leadership. Update the list when leadership changes.
