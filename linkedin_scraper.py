@@ -1792,7 +1792,9 @@ def _coverage_section(cfg, stats, last, earliest) -> str:
         gaps.insert(0, "<span class='warn'>LinkedIn search didn't run this time</span> (no Tavily, Brave Search or SerpAPI key). "
                        "LinkedIn coverage is limited to posts added to the inbox, and engagement counts can't be collected.")
     return f"""<section class="coverage">
-<h2 data-sec="coverage" id="coverage"><span class="eyebrow">Last run</span>Coverage &amp; blind spots</h2>
+<h2 data-sec="coverage" id="coverage"><span class="eyebrow">About this report · tool metadata</span>Coverage &amp; blind spots</h2>
+<p class="lede">How the latest run collected its data, what it could and couldn't see, and search credit usage. This is for checking the tool itself, not part of the market picture above.</p>
+<details class="more meta"><summary>Show collection details</summary>
 <p class="mut">Last run {html.escape(last['started'][:16].replace('T', ' '))} UTC · sources: {html.escape(last['sources'])}
  · lookback {lb or '?'} days · data back to {html.escape(earliest or '—')}</p>
 {_usage_line(cfg)}
@@ -1800,6 +1802,7 @@ def _coverage_section(cfg, stats, last, earliest) -> str:
 <th>Empty</th><th>Capped</th><th>Errors</th></tr></thead><tbody>{rows or '<tr><td colspan=7>No query stats for this run.</td></tr>'}</tbody></table></div>
 {details}
 <div class="panel" style="margin-top:12px"><h3>Known blind spots</h3><ul class="glance">{''.join(f'<li>{g}</li>' for g in gaps)}</ul></div>
+</details>
 </section>"""
 
 
@@ -1923,7 +1926,7 @@ def render_html(cfg, all_items, briefs, last, stats, earliest, first_run) -> str
         f"{'Last week' if p == 7 else f'{p} days'}</button>" for p in periods)
     jumps = "".join(f"<button type='button' data-jump='{k}'>{v}</button>" for k, v in (
         ("summary", "Summary"), ("new", "New this run"), ("rising", "Rising"), ("beyond", "Beyond the watchlist"),
-        ("overview", "Overview"), ("items", "All items"), ("coverage", "Coverage")))
+        ("overview", "Overview"), ("items", "All items"), ("coverage", "About the data")))
     panels = "".join(_period_panel(cfg, p, all_items, briefs, last_run, earliest, first_run, any_counts) for p in periods)
     linkedin_on = _has_linkedin_source(last, stats)
     ch = Counter(i["channel"] for i in all_items)
@@ -2009,6 +2012,7 @@ h2+.lede{{margin:-6px 0 14px;color:var(--mut);max-width:80ch}}
 text-decoration-color:color-mix(in srgb,currentColor 35%,transparent);text-underline-offset:3px}}
 .cellbtn[aria-expanded=true]{{font-weight:700;text-decoration-color:currentColor}}
 .drill{{margin-top:10px;border-color:var(--acc)}}.drill-close{{font:20px/1 var(--f-body);background:none;border:0;color:var(--mut);cursor:pointer}}
+details.meta{{margin-top:4px}}.coverage{{margin-top:56px;padding-top:8px;border-top:1px dashed var(--line)}}
 details.older{{margin-top:10px}}details.older>summary{{font-size:13px}}
 .legend{{font-size:12px;color:var(--mut);margin:6px 0 0}}.legend b{{color:var(--fg);font-weight:500}}
 .quiet{{font-size:13px;color:var(--mut);margin:12px 0 0;padding-top:6px;border-top:1px solid var(--soft)}}.quiet p{{margin:4px 0 0}}
